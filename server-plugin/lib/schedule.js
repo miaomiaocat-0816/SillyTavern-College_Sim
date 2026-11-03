@@ -58,6 +58,11 @@ export function loadSchedule() {
     return schedule;
 }
 
+/** 使课表缓存失效（M6-5 规则编辑器写回后调用） */
+export function invalidateSchedule() {
+    schedule = null;
+}
+
 /** 获取全部课程 */
 export function getSchedule() {
     return loadSchedule().courses;

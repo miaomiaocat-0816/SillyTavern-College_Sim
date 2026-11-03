@@ -23,6 +23,12 @@ import { activateEncounter, deactivateEncounter, isEncounterExpired, promoteToRe
 import { parseIntent, buildIntentPrompt, buildNpcSpeechPrompt } from '../lib/intent.js';
 import { resolveBinding, setBinding, getBindings, validateBindings, USE_TYPES } from '../lib/binding.js';
 import { getDisplayOrderedDefs, getRoleDisplayData } from '../lib/attributes.js';
+import { loadSettings, getSetting, isAdultEnabled, updateSettings } from '../lib/settings.js';
+import { adultItemFilter, adultEventFilter } from '../lib/adult.js';
+import { createCycle, advanceCycle, serializeCycle, restoreCycle } from '../lib/cycle.js';
+import { rollFertilization, applyFertilization, BASE_RATE, PHASE_RATE_TABLE } from '../lib/fertilization.js';
+import { exportJson, importJson, upsertAttribute, deleteAttribute, upsertCourse, deleteCourse, upsertItem, deleteItem } from '../lib/editor.js';
+import { skipDays } from '../lib/skip.js';
 
 /** 从请求中提取 chatId */
 function extractChatId(req) {
@@ -111,7 +117,9 @@ export function registerRoutes(router) {
 
     // ===== 物品模板 =====
     router.get('/items/templates', wrap(async (req, res) => {
-        ok(res, getAllTemplates());
+        // M6-1：开关关闭时，成人向物品不出现在商品列表
+        const all = getAllTemplates();
+        ok(res, adultItemFilter(all, isAdultEnabled()));
     }));
 
     // ===== 背包 =====
@@ -282,7 +290,9 @@ export function registerRoutes(router) {
     router.get('/events', wrap(async (req, res) => {
         const chatId = extractChatId(req);
         const state = await getState(chatId);
-        const queue = sortQueue(state.events || []);
+        let queue = sortQueue(state.events || []);
+        // M6-1：开关关闭时，成人向事件不在事件池
+        queue = adultEventFilter(queue, isAdultEnabled());
         ok(res, { pending: queue.length, events: queue });
     }));
 
@@ -465,6 +475,143 @@ export function registerRoutes(router) {
         const role = req.query?.role || 'self';
         const useType = req.query?.useType || USE_TYPES.MAIN_EVENT;
         ok(res, resolveBinding(state.bindings, role, useType));
+    }));
+
+    // ===== M6-1：成人开关 / 配置 =====
+    router.get('/settings', wrap(async (req, res) => {
+        ok(res, loadSettings());
+    }));
+
+    router.post('/settings', wrap(async (req, res) => {
+        const result = updateSettings(req.body || {});
+        if (!result.ok) return fail(res, 400, 'INVALID_SETTINGS', result.error);
+        ok(res, result.settings);
+    }));
+
+    // ===== M6-2：生理状态组件 =====
+    router.get('/cycle', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        const role = req.query?.role || 'self';
+        const vals = state.attributes?.[role];
+        const cycle = vals?.cycle || null;
+        ok(res, { role, cycle: cycle ? serializeCycle(cycle) : null });
+    }));
+
+    router.post('/cycle/init', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { role, dayInCycle, cycleLength } = req.body || {};
+        if (!role) return fail(res, 400, 'INVALID_ROLE', '缺少 role');
+        const result = await mutate(chatId, (st) => {
+            if (!st.attributes) st.attributes = {};
+            if (!st.attributes[role]) st.attributes[role] = {};
+            st.attributes[role].cycle = createCycle({ dayInCycle, cycleLength });
+            return serializeCycle(st.attributes[role].cycle);
+        });
+        ok(res, { role, cycle: result });
+    }));
+
+    // ===== M6-3：受孕判定 =====
+    router.post('/fertilization/roll', wrap(async (req, res) => {
+        // 铁律 R5：开关关闭时代码路径完全不执行
+        if (!isAdultEnabled()) {
+            return fail(res, 403, 'ADULT_DISABLED', '成人事件未开启（enable_adult_events=false）');
+        }
+        const chatId = extractChatId(req);
+        const { role, itemIntact } = req.body || {};
+        if (!role) return fail(res, 400, 'INVALID_ROLE', '缺少 role');
+        const result = await mutate(chatId, (st) => {
+            const vals = st.attributes?.[role] || {};
+            const phase = vals.cycle?.phase || 'follicular';
+            const roll = rollFertilization({ itemIntact: itemIntact !== false, phase });
+            const applied = applyFertilization(st, role, roll.pregnant);
+            return { pregnant: roll.pregnant, probability: roll.probability, phase, eventId: applied.eventId };
+        });
+        ok(res, result);
+    }));
+
+    // 受孕概率查表（只读，供前端展示）
+    router.get('/fertilization/table', wrap(async (req, res) => {
+        ok(res, { baseRate: BASE_RATE, table: PHASE_RATE_TABLE });
+    }));
+
+    // ===== M6-4/5/6：规则编辑器 =====
+    // 导出配置
+    router.get('/editor/export/:kind', wrap(async (req, res) => {
+        const { kind } = req.params;
+        if (!['attributes', 'schedule', 'items'].includes(kind)) {
+            return fail(res, 400, 'INVALID_KIND', 'kind 必须是 attributes/schedule/items');
+        }
+        try {
+            ok(res, { kind, json: exportJson(kind) });
+        } catch (e) {
+            fail(res, 500, 'EXPORT_FAILED', `导出失败：${e.message}`);
+        }
+    }));
+
+    // 导入配置（整体覆盖，先校验）
+    router.post('/editor/import/:kind', wrap(async (req, res) => {
+        const { kind } = req.params;
+        if (!['attributes', 'schedule', 'items'].includes(kind)) {
+            return fail(res, 400, 'INVALID_KIND', 'kind 必须是 attributes/schedule/items');
+        }
+        const { content } = req.body || {};
+        const result = importJson(kind, content);
+        if (!result.ok) return fail(res, 400, 'INVALID_CONFIG', result.error);
+        ok(res, { imported: kind });
+    }));
+
+    // 属性：增/改
+    router.post('/editor/attribute', wrap(async (req, res) => {
+        const result = upsertAttribute(req.body || {});
+        if (!result.ok) return fail(res, 400, 'INVALID_ATTRIBUTE', result.error);
+        ok(res, { saved: true });
+    }));
+
+    // 属性：删
+    router.delete('/editor/attribute/:key', wrap(async (req, res) => {
+        const result = deleteAttribute(req.params.key);
+        if (!result.ok) return fail(res, 400, 'DELETE_FAILED', result.error);
+        ok(res, { deleted: req.params.key });
+    }));
+
+    // 课表：增/改
+    router.post('/editor/course', wrap(async (req, res) => {
+        const result = upsertCourse(req.body || {});
+        if (!result.ok) return fail(res, 400, 'INVALID_COURSE', result.error);
+        ok(res, { saved: true });
+    }));
+
+    // 课表：删
+    router.delete('/editor/course/:id', wrap(async (req, res) => {
+        const result = deleteCourse(req.params.id);
+        if (!result.ok) return fail(res, 400, 'DELETE_FAILED', result.error);
+        ok(res, { deleted: req.params.id });
+    }));
+
+    // 物品：增/改
+    router.post('/editor/item', wrap(async (req, res) => {
+        const result = upsertItem(req.body || {});
+        if (!result.ok) return fail(res, 400, 'INVALID_ITEM', result.error);
+        ok(res, { saved: true });
+    }));
+
+    // 物品：删
+    router.delete('/editor/item/:id', wrap(async (req, res) => {
+        const result = deleteItem(req.params.id);
+        if (!result.ok) return fail(res, 400, 'DELETE_FAILED', result.error);
+        ok(res, { deleted: req.params.id });
+    }));
+
+    // ===== M6-8：批量时间跳跃 =====
+    router.post('/skip', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { days } = req.body || {};
+        const result = await mutate(chatId, (st) => {
+            return skipDays(st, Number(days));
+        });
+        if (!result.ok) return fail(res, 400, 'INVALID_SKIP', result.error);
+        ok(res, result);
     }));
 
     // ===== 404 兜底 =====

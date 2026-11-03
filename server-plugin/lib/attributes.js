@@ -58,6 +58,12 @@ export function loadAttributes() {
     return attrDefs;
 }
 
+/** 使属性缓存失效（M6-4 规则编辑器写回后调用） */
+export function invalidateAttributes() {
+    attrDefs = null;
+    attrGroups = null;
+}
+
 /** 获取单个属性定义 */
 export function getAttributeDef(key) {
     return loadAttributes().get(key);

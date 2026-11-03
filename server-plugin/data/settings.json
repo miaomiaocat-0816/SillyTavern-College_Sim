@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "enable_adult_events": false,
+  "probability": {
+    "durable_break": 0.2,
+    "stranger_trigger": 0.3,
+    "affinity_decay_per_rp24h_no_interaction": -1
+  }
+}

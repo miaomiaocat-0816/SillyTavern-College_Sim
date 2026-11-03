@@ -449,6 +449,168 @@ async function pickupDelivery(deliveryId) {
     refreshInventoryTab();
 }
 
+// ============ M6 配置 tab ============
+
+async function refreshSettingsTab() {
+    try {
+        const result = await api('GET', '/settings');
+        if (!result.ok) return;
+        const s = result.data;
+        // 成人开关
+        $('#us-adult-toggle').prop('checked', s.enable_adult_events === true);
+        // 概率字段
+        const prob = s.probability || {};
+        const fields = [
+            { key: 'durable_break', label: '破损概率' },
+            { key: 'stranger_trigger', label: '陌生人触发' },
+            { key: 'affinity_decay_per_rp24h_no_interaction', label: '好感衰减/天' },
+        ];
+        const $el = $('#us-probability-fields');
+        $el.empty();
+        for (const f of fields) {
+            const val = prob[f.key] !== undefined ? prob[f.key] : '';
+            $el.append(`
+                <div class="us-field-row">
+                    <label>${f.label}</label>
+                    <input class="us-input us-prob-input" data-key="${f.key}" type="number" step="0.05" value="${val}">
+                </div>
+            `);
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新配置失败`, e);
+    }
+}
+
+async function toggleAdult(enabled) {
+    const result = await api('POST', '/settings', { enable_adult_events: enabled });
+    if (result.ok) {
+        toastr?.success(`成人事件已${enabled ? '开启' : '关闭'}（物品/事件列表需刷新）`);
+    } else {
+        toastr?.warning(`设置失败：${result.error?.message || '未知错误'}`);
+    }
+}
+
+async function saveProbability() {
+    const patch = { probability: {} };
+    $('.us-prob-input').each(function () {
+        const key = $(this).data('key');
+        const val = Number($(this).val());
+        if (Number.isFinite(val)) patch.probability[key] = val;
+    });
+    const result = await api('POST', '/settings', patch);
+    if (result.ok) {
+        toastr?.success('概率参数已保存（即时生效）');
+    } else {
+        toastr?.warning(`保存失败：${result.error?.message || '未知错误'}`);
+    }
+}
+
+async function doSkip() {
+    const days = Number($('#us-skip-days').val());
+    if (!Number.isFinite(days) || days <= 0) {
+        toastr?.warning('请输入正数天数');
+        return;
+    }
+    const result = await api('POST', '/skip', { days });
+    if (result.ok) {
+        $('#us-skip-result').text(result.data.summary).show();
+        refreshTimeTab();
+    } else {
+        toastr?.warning(`快进失败：${result.error?.message || '未知错误'}`);
+    }
+}
+
+// ============ M6 规则编辑器 tab ============
+
+let editorKind = 'attributes'; // 当前编辑的配置类型
+
+async function refreshEditorTab() {
+    try {
+        const result = await api('GET', `/editor/export/${editorKind}`);
+        if (!result.ok) return;
+        const obj = JSON.parse(result.data.json);
+        const $el = $('#us-editor-list');
+        $el.empty();
+        // 根据类型渲染列表
+        if (editorKind === 'attributes') {
+            const list = obj.attributes || [];
+            for (const a of list) {
+                $el.append(`
+                    <div class="us-editor-item">
+                        <span>${a.key}（${a.label || ''}）</span>
+                        <button class="us-btn us-btn-edit" data-kind="attributes" data-id="${a.key}">编辑</button>
+                    </div>
+                `);
+            }
+        } else if (editorKind === 'schedule') {
+            const list = obj.courses || [];
+            for (const c of list) {
+                $el.append(`
+                    <div class="us-editor-item">
+                        <span>${c.name}（周${c.dayOfWeek} ${fmtMinute(c.startMinute)}-${fmtMinute(c.endMinute)}）</span>
+                        <button class="us-btn us-btn-del" data-kind="schedule" data-id="${c.id}">删除</button>
+                    </div>
+                `);
+            }
+        } else {
+            const list = obj.items || [];
+            for (const t of list) {
+                $el.append(`
+                    <div class="us-editor-item">
+                        <span>${t.name}（${t.type} ¥${t.price}）</span>
+                        <button class="us-btn us-btn-del" data-kind="items" data-id="${t.id}">删除</button>
+                    </div>
+                `);
+            }
+        }
+        if (obj.attributes?.length === 0 && obj.courses?.length === 0 && obj.items?.length === 0) {
+            $el.append('<div class="us-empty">暂无条目</div>');
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新规则编辑器失败`, e);
+    }
+}
+
+function fmtMinute(m) {
+    const h = Math.floor(m / 60), mm = m % 60;
+    return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+async function exportEditor() {
+    const result = await api('GET', `/editor/export/${editorKind}`);
+    if (!result.ok) return;
+    // 显示 JSON 到 textarea，供复制
+    $('#us-editor-json').val(result.data.json).show();
+    toastr?.info('已载入导出 JSON（可复制）');
+}
+
+async function importEditor() {
+    const json = $('#us-editor-json').val();
+    if (!json.trim()) {
+        $('#us-editor-json').show();
+        toastr?.info('请先粘贴要导入的 JSON');
+        return;
+    }
+    const result = await api('POST', `/editor/import/${editorKind}`, { content: json });
+    if (result.ok) {
+        toastr?.success('导入成功');
+        $('#us-editor-json').hide();
+        refreshEditorTab();
+    } else {
+        toastr?.warning(`导入失败：${result.error?.message || '未知错误'}`);
+    }
+}
+
+async function deleteEditorItem(id) {
+    const result = await api('DELETE', `/editor/${editorKind === 'attributes' ? 'attribute' : editorKind === 'schedule' ? 'course' : 'item'}/${id}`);
+    if (result.ok) {
+        toastr?.success('已删除');
+        refreshEditorTab();
+    } else {
+        toastr?.warning(`删除失败：${result.error?.message || '未知错误'}`);
+    }
+}
+
 function buildPanel() {
     if ($(`#${PANEL_ID}`).length) return;
 
@@ -465,6 +627,8 @@ function buildPanel() {
             <div class="us-tab" data-tab="affinity">好感</div>
             <div class="us-tab" data-tab="pool">角色池</div>
             <div class="us-tab" data-tab="audit">裁决</div>
+            <div class="us-tab" data-tab="settings">配置</div>
+            <div class="us-tab" data-tab="editor">规则</div>
         </div>
         <div class="us-tab-content">
             <div class="us-pane" data-pane="time">
@@ -500,6 +664,38 @@ function buildPanel() {
             <div class="us-pane" data-pane="audit" style="display:none;">
                 <div id="us-audit-list" class="us-list"></div>
             </div>
+            <div class="us-pane" data-pane="settings" style="display:none;">
+                <div class="us-section-title">成人事件开关</div>
+                <div class="us-switch-row">
+                    <span class="us-switch-label">启用成人事件</span>
+                    <label class="us-toggle">
+                        <input type="checkbox" id="us-adult-toggle">
+                        <span class="us-toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="us-section-title">概率与触发（即时生效）</div>
+                <div id="us-probability-fields"></div>
+                <div class="us-section-title">时间跳跃</div>
+                <div class="us-skip-row">
+                    <input class="us-input" id="us-skip-days" type="number" min="0.5" step="0.5" value="1" style="flex:1">
+                    <button class="us-btn" id="us-btn-skip">快进(天)</button>
+                </div>
+                <div id="us-skip-result" class="us-empty" style="display:none;"></div>
+            </div>
+            <div class="us-pane" data-pane="editor" style="display:none;">
+                <div class="us-editor-subtabs">
+                    <div class="us-editor-subtab active" data-kind="attributes">属性</div>
+                    <div class="us-editor-subtab" data-kind="schedule">课表</div>
+                    <div class="us-editor-subtab" data-kind="items">物品</div>
+                </div>
+                <div id="us-editor-list" class="us-list" style="max-height:220px;"></div>
+                <div class="us-editor-actions">
+                    <button class="us-btn" id="us-btn-editor-export">导出</button>
+                    <button class="us-btn" id="us-btn-editor-import">导入</button>
+                </div>
+                <textarea id="us-editor-json" class="us-input" style="width:100%;height:80px;margin-top:6px;display:none;" placeholder="粘贴 JSON 导入"></textarea>
+                <button class="us-btn" id="us-btn-editor-apply-import" style="display:none;width:100%;margin-top:4px;">确认导入</button>
+            </div>
         </div>
     </div>
     `);
@@ -519,6 +715,8 @@ function buildPanel() {
         if (tab === 'delivery') refreshDeliveryTab();
         if (tab === 'attributes') refreshAttributesTab();
         if (tab === 'affinity') refreshAffinityTab();
+        if (tab === 'settings') refreshSettingsTab();
+        if (tab === 'editor') refreshEditorTab();
     });
 
     $('#us-btn-pause').on('click', pause);
@@ -545,6 +743,35 @@ function buildPanel() {
     $panel.on('click', '.us-btn-pickup', function () {
         pickupDelivery($(this).data('delivery'));
     });
+
+    // M6 配置：成人开关
+    $('#us-adult-toggle').on('change', function () {
+        toggleAdult($(this).prop('checked'));
+    });
+
+    // M6 配置：概率字段失焦即保存
+    $panel.on('change', '.us-prob-input', saveProbability);
+
+    // M6 配置：时间跳跃
+    $('#us-btn-skip').on('click', doSkip);
+
+    // M6 规则编辑器：子 tab 切换
+    $panel.on('click', '.us-editor-subtab', function () {
+        editorKind = $(this).data('kind');
+        $('.us-editor-subtab').removeClass('active');
+        $(this).addClass('active');
+        $('#us-editor-json').hide();
+        refreshEditorTab();
+    });
+
+    // M6 规则编辑器：删除条目
+    $panel.on('click', '.us-btn-del', function () {
+        deleteEditorItem($(this).data('id'));
+    });
+
+    // M6 规则编辑器：导出/导入
+    $('#us-btn-editor-export').on('click', exportEditor);
+    $('#us-btn-editor-import').on('click', importEditor);
 }
 
 // ============ 斜杠命令（M3-7）============
@@ -646,6 +873,50 @@ function registerCommands() {
             const tickRes = await api('POST', '/tick', { chatId: chatId() });
             if (!tickRes.ok) return `推进失败：${tickRes.error?.message || '未知错误'}`;
             return `时间已推进到 ${tickRes.data.timeLabel}`;
+        },
+    }));
+
+    // /us-skip 批量时间跳跃（M6-8）
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'us-skip',
+        helpString: '批量快进 RP 时间：/us-skip <天数>（如 2d、2、0.5）',
+        returns: '跳跃摘要',
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({ description: '跳跃天数（支持 2d 写法）', typeList: ['string'], isRequired: true }),
+        ],
+        callback: async (namedArgs, unnamedArgs) => {
+            const raw = String(Array.isArray(unnamedArgs) ? unnamedArgs[0] : unnamedArgs).trim();
+            const days = Number(raw.replace(/d$/i, ''));
+            if (!Number.isFinite(days) || days <= 0) return '用法：/us-skip <天数>，例如 /us-skip 2d 或 /us-skip 0.5';
+            const result = await api('POST', '/skip', { chatId: chatId(), days });
+            if (!result.ok) return `快进失败：${result.error?.message || '未知错误'}`;
+            getContext().sendSystemMessage('system', result.data.summary);
+            return result.data.summary;
+        },
+    }));
+
+    // /us-settings 查看配置（M6-1/7）
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'us-settings',
+        helpString: '查看/修改大学模拟配置：/us-settings 或 /us-settings adult on|off',
+        returns: '配置信息',
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({ description: '可选的子命令（adult on/off）', typeList: ['string'], isRequired: false }),
+        ],
+        callback: async (namedArgs, unnamedArgs) => {
+            const args = Array.isArray(unnamedArgs) ? unnamedArgs : [unnamedArgs];
+            // 处理 /us-settings adult on|off
+            if (args.length >= 2 && args[0] === 'adult') {
+                const on = args[1] === 'on' || args[1] === 'true';
+                const result = await api('POST', '/settings', { enable_adult_events: on });
+                if (!result.ok) return `设置失败：${result.error?.message || '未知错误'}`;
+                return `成人事件已${on ? '开启' : '关闭'}`;
+            }
+            const result = await api('GET', '/settings');
+            if (!result.ok) return `查询失败：${result.error?.message || '未知错误'}`;
+            const s = result.data;
+            const p = s.probability || {};
+            return `成人事件：${s.enable_adult_events ? '开' : '关'} | 破损概率 ${p.durable_break} | 陌生人触发 ${p.stranger_trigger} | 好感衰减 ${p.affinity_decay_per_rp24h_no_interaction}/天`;
         },
     }));
 }

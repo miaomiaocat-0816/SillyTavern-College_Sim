@@ -64,6 +64,11 @@ export function loadTemplates() {
     return templates;
 }
 
+/** 使模板缓存失效（M6-6 规则编辑器写回后调用） */
+export function invalidateTemplates() {
+    templates = null;
+}
+
 /** 获取单个模板 */
 export function getTemplate(id) {
     return loadTemplates().get(id);
