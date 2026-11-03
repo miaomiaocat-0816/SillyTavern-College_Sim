@@ -205,3 +205,116 @@
     padding: 3px 10px;
     font-size: 12px;
 }
+
+/* M5 耐久条、属性、好感、快递 */
+#university-sim-panel .us-item-instance {
+    padding: 4px 0 4px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+#university-sim-panel .us-item-durability {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+#university-sim-panel .us-durability-bar {
+    flex: 1;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#university-sim-panel .us-durability-fill {
+    height: 100%;
+    background: #7fa;
+    transition: width 0.3s ease;
+}
+
+#university-sim-panel .us-durability-val {
+    font-size: 11px;
+    opacity: 0.7;
+    white-space: nowrap;
+}
+
+#university-sim-panel .us-attr-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#university-sim-panel .us-attr-label {
+    min-width: 44px;
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+#university-sim-panel .us-attr-value {
+    min-width: 30px;
+    text-align: right;
+    font-weight: 600;
+}
+
+#university-sim-panel .us-attr-tag {
+    padding: 2px 10px;
+    border-radius: 12px;
+    border: 1px solid;
+    font-size: 12px;
+}
+
+#university-sim-panel .us-affinity-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-wrap: wrap;
+}
+
+#university-sim-panel .us-affinity-name {
+    min-width: 70px;
+    font-weight: 600;
+}
+
+#university-sim-panel .us-affinity-value {
+    min-width: 28px;
+    text-align: right;
+    font-weight: 600;
+}
+
+#university-sim-panel .us-affinity-last {
+    font-size: 11px;
+    opacity: 0.6;
+    width: 100%;
+    padding-left: 78px;
+}
+
+#university-sim-panel .us-delivery-section {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.7;
+    padding: 8px 0 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+#university-sim-panel .us-delivery-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#university-sim-panel .us-delivery-row.in-transit .us-delivery-countdown {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+#university-sim-panel .us-delivery-row.arrived {
+    color: #7fbf7f;
+}

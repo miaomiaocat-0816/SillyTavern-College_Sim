@@ -59,6 +59,11 @@ export function createDefaultState() {
         encounterLog: [],     // 相遇记录（M4-4：<100字摘要）
         activeEncounter: null,// 当前活跃陌生人注入（M4-4）
         intent: {},           // NPC 意图判定结果（M4-7，key=role）
+        bindings: {           // 多 API 连接绑定（M5-1）
+            byUse: {},        // 按用途：useType -> profileId
+            byRole: {},       // 按角色：role -> profileId
+        },
+        residents: [],        // 常驻角色（M4-10）
     };
 }
 
@@ -105,6 +110,8 @@ function migrate(state) {
     if (!state.pool) state.pool = [];
     if (!state.encounterLog) state.encounterLog = [];
     if (!state.intent) state.intent = {};
+    if (!state.bindings) state.bindings = { byUse: {}, byRole: {} };
+    if (!state.residents) state.residents = [];
     return state;
 }
 

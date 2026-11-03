@@ -139,11 +139,188 @@ async function refreshInventoryTab() {
             return;
         }
         for (const g of groups) {
-            $el.append(`<div class="us-item-row"><span>${g.name}</span><span class="us-item-count">×${g.count}</span></div>`);
+            const $row = $(`<div class="us-item-group"></div>`);
+            // 头部：名称 + 数量
+            const $head = $(`<div class="us-item-row"><span>${g.name}</span><span class="us-item-count">×${g.count}</span></div>`);
+            $row.append($head);
+
+            // 每个实例的耐久条 + 操作按钮（可展开）
+            for (const inst of g.instances) {
+                if (inst.durability !== undefined) {
+                    const tpl = g; // 聚合里没有 maxDurability，用相对比例（默认满耐久视为 100%）
+                    // 这里用实例自身耐久显示，进度条宽度按 (durability / 已知上限) 估算，上限未知则用耐久值本身
+                    const durPct = Math.max(0, Math.min(100, inst.durability * 10));
+                    $row.append(`
+                        <div class="us-item-instance" data-instance="${inst.id}">
+                            <div class="us-item-durability">
+                                <div class="us-durability-bar"><div class="us-durability-fill" style="width:${durPct}%"></div></div>
+                                <span class="us-durability-val">耐久 ${inst.durability}</span>
+                            </div>
+                            <div class="us-pool-actions">
+                                <button class="us-btn us-btn-use" data-instance="${inst.id}">使用</button>
+                                <button class="us-btn us-btn-discard" data-instance="${inst.id}">丢弃</button>
+                            </div>
+                        </div>
+                    `);
+                } else {
+                    // 无耐久物品（consumable 等）
+                    $row.append(`
+                        <div class="us-item-instance" data-instance="${inst.id}">
+                            <div class="us-pool-actions">
+                                <button class="us-btn us-btn-use" data-instance="${inst.id}">使用</button>
+                                <button class="us-btn us-btn-discard" data-instance="${inst.id}">丢弃</button>
+                            </div>
+                        </div>
+                    `);
+                }
+            }
+            $el.append($row);
         }
     } catch (e) {
         console.error(`[${MODULE_NAME}] 刷新背包失败`, e);
     }
+}
+
+async function refreshDeliveryTab() {
+    try {
+        const result = await api('GET', '/deliveries');
+        if (!result.ok) return;
+        const list = result.data || [];
+        const $el = $('#us-delivery-list');
+        $el.empty();
+        if (list.length === 0) {
+            $el.append('<div class="us-empty">暂无快递</div>');
+            return;
+        }
+        // 分组：在途 / 已到站
+        const inTransit = list.filter(d => d.status === 'in_transit');
+        const arrived = list.filter(d => d.status === 'arrived');
+
+        const renderDelivery = (d) => {
+            const name = d.items?.[0]?.templateId || d.templateId || '未知物品';
+            const qty = d.items?.length || d.qty || 1;
+            if (d.status === 'in_transit') {
+                return `<div class="us-delivery-row in-transit"><span>${name} ×${qty}</span><span class="us-delivery-countdown">剩余 ${d.arriveAt ? formatRemain(d.arriveAt) : '--'}</span></div>`;
+            }
+            return `<div class="us-delivery-row arrived"><span>${name} ×${qty}</span><button class="us-btn us-btn-pickup" data-delivery="${d.id}">取件</button></div>`;
+        };
+
+        if (inTransit.length > 0) {
+            $el.append('<div class="us-delivery-section">在途</div>');
+            inTransit.forEach(d => $el.append(renderDelivery(d)));
+        }
+        if (arrived.length > 0) {
+            $el.append('<div class="us-delivery-section">已到站</div>');
+            arrived.forEach(d => $el.append(renderDelivery(d)));
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新快递失败`, e);
+    }
+}
+
+// 格式化剩余 RP 时间（arriveAt 是 epochMinute，需对比当前时间）
+async function formatRemain(arriveAt) {
+    try {
+        const st = await api('GET', '/state');
+        if (!st.ok) return '--';
+        const now = st.data.time.epochMinute;
+        const diff = arriveAt - now;
+        if (diff <= 0) return '已到站';
+        const hours = Math.floor(diff / 60);
+        const mins = diff % 60;
+        if (hours > 0) return `${hours}小时${mins}分`;
+        return `${mins}分钟`;
+    } catch (e) {
+        return '--';
+    }
+}
+
+async function refreshAttributesTab() {
+    try {
+        const result = await api('GET', '/attributes/display?role=self');
+        if (!result.ok) return;
+        const $el = $('#us-attributes-list');
+        $el.empty();
+        if (result.data.length === 0) {
+            $el.append('<div class="us-empty">无属性</div>');
+            return;
+        }
+        for (const a of result.data) {
+            const widget = a.display.widget || 'number';
+            if (widget === 'bar') {
+                const pct = a.def?.max ? Math.round((a.value / a.def.max) * 100) : a.value;
+                $el.append(`
+                    <div class="us-attr-row">
+                        <span class="us-attr-label">${a.label}</span>
+                        <div class="us-durability-bar"><div class="us-durability-fill" style="width:${pct}%;background:${a.display.color || '#7fa'}"></div></div>
+                        <span class="us-attr-value">${a.value}</span>
+                    </div>
+                `);
+            } else if (widget === 'tag') {
+                $el.append(`
+                    <div class="us-attr-row">
+                        <span class="us-attr-label">${a.label}</span>
+                        <span class="us-attr-tag" style="border-color:${a.display.color || '#7fa'}">${a.value ?? '—'}</span>
+                    </div>
+                `);
+            } else {
+                $el.append(`
+                    <div class="us-attr-row">
+                        <span class="us-attr-label">${a.label}</span>
+                        <span class="us-attr-value">${a.value}</span>
+                    </div>
+                `);
+            }
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新属性失败`, e);
+    }
+}
+
+async function refreshAffinityTab() {
+    try {
+        const result = await api('GET', '/state');
+        if (!result.ok) return;
+        const $el = $('#us-affinity-list');
+        $el.empty();
+        const attrs = result.data.attributes || {};
+        // 收集各 NPC 的 affinity，降序
+        const list = [];
+        for (const roleKey of Object.keys(attrs)) {
+            if (roleKey === 'self') continue;
+            const aff = attrs[roleKey]?.affinity;
+            if (aff !== undefined) {
+                list.push({ role: roleKey, affinity: aff, lastInteraction: attrs[roleKey].lastInteraction || 0 });
+            }
+        }
+        list.sort((a, b) => b.affinity - a.affinity);
+        if (list.length === 0) {
+            $el.append('<div class="us-empty">暂无 NPC 好感数据</div>');
+            return;
+        }
+        for (const n of list) {
+            const lastText = n.lastInteraction ? ` | 上次互动 ${formatTimeAgo(n.lastInteraction)}` : '';
+            $el.append(`
+                <div class="us-affinity-row">
+                    <span class="us-affinity-name">${n.role}</span>
+                    <div class="us-durability-bar"><div class="us-durability-fill" style="width:${Math.max(0, Math.min(100, n.affinity))}%;background:#e84393"></div></div>
+                    <span class="us-affinity-value">${n.affinity}</span>
+                    <span class="us-affinity-last">${lastText}</span>
+                </div>
+            `);
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新好感失败`, e);
+    }
+}
+
+// 距上次互动的时长（RP 分钟 → 可读）
+function formatTimeAgo(rpMinute) {
+    const diff = Math.max(0, rpMinute);
+    if (diff < 60) return `${diff}分钟前`;
+    const hours = Math.floor(diff / 60);
+    if (hours < 24) return `${hours}小时前`;
+    return `${Math.floor(hours / 24)}天前`;
 }
 
 async function refreshAuditTab() {
@@ -238,6 +415,40 @@ async function setRate(rate) { await api('POST', '/time', { action: 'setRate', v
 async function pause() { await api('POST', '/time', { action: 'pause' }); refreshTimeTab(); }
 async function resume() { await api('POST', '/time', { action: 'resume' }); refreshTimeTab(); }
 
+// 使用物品
+async function useItem(instanceId) {
+    const result = await api('POST', '/action', { type: 'use', instanceId });
+    if (result.ok) {
+        toastr?.info('已使用');
+    } else {
+        toastr?.warning(`使用失败：${result.error?.message || '未知错误'}`);
+    }
+    refreshInventoryTab();
+}
+
+// 丢弃物品
+async function discardItem(instanceId) {
+    const result = await api('POST', '/action', { type: 'discard', instanceId });
+    if (result.ok) {
+        toastr?.info('已丢弃');
+    } else {
+        toastr?.warning(`丢弃失败：${result.error?.message || '未知错误'}`);
+    }
+    refreshInventoryTab();
+}
+
+// 取快递
+async function pickupDelivery(deliveryId) {
+    const result = await api('POST', '/action', { type: 'pickup', deliveryId });
+    if (result.ok) {
+        toastr?.success(`取件成功，收到 ${result.data.received?.length || 0} 件物品`);
+    } else {
+        toastr?.warning(`取件失败：${result.error?.message || '未知错误'}`);
+    }
+    refreshDeliveryTab();
+    refreshInventoryTab();
+}
+
 function buildPanel() {
     if ($(`#${PANEL_ID}`).length) return;
 
@@ -250,6 +461,8 @@ function buildPanel() {
             <div class="us-tab active" data-tab="time">时间</div>
             <div class="us-tab" data-tab="inventory">背包</div>
             <div class="us-tab" data-tab="delivery">快递</div>
+            <div class="us-tab" data-tab="attributes">属性</div>
+            <div class="us-tab" data-tab="affinity">好感</div>
             <div class="us-tab" data-tab="pool">角色池</div>
             <div class="us-tab" data-tab="audit">裁决</div>
         </div>
@@ -273,7 +486,13 @@ function buildPanel() {
                 <div id="us-inventory-list" class="us-list"></div>
             </div>
             <div class="us-pane" data-pane="delivery" style="display:none;">
-                <div class="us-empty">快递（M3 后续完善）</div>
+                <div id="us-delivery-list" class="us-list"></div>
+            </div>
+            <div class="us-pane" data-pane="attributes" style="display:none;">
+                <div id="us-attributes-list" class="us-list"></div>
+            </div>
+            <div class="us-pane" data-pane="affinity" style="display:none;">
+                <div id="us-affinity-list" class="us-list"></div>
             </div>
             <div class="us-pane" data-pane="pool" style="display:none;">
                 <div id="us-pool-list" class="us-list"></div>
@@ -297,6 +516,9 @@ function buildPanel() {
         if (tab === 'inventory') refreshInventoryTab();
         if (tab === 'audit') refreshAuditTab();
         if (tab === 'pool') refreshPoolTab();
+        if (tab === 'delivery') refreshDeliveryTab();
+        if (tab === 'attributes') refreshAttributesTab();
+        if (tab === 'affinity') refreshAffinityTab();
     });
 
     $('#us-btn-pause').on('click', pause);
@@ -309,6 +531,19 @@ function buildPanel() {
     });
     $panel.on('click', '.us-btn-promote', function () {
         promoteCard($(this).data('card'));
+    });
+
+    // 背包操作按钮（事件委托）
+    $panel.on('click', '.us-btn-use', function () {
+        useItem($(this).data('instance'));
+    });
+    $panel.on('click', '.us-btn-discard', function () {
+        discardItem($(this).data('instance'));
+    });
+
+    // 快递取件按钮（事件委托）
+    $panel.on('click', '.us-btn-pickup', function () {
+        pickupDelivery($(this).data('delivery'));
     });
 }
 

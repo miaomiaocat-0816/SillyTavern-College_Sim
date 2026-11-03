@@ -69,6 +69,39 @@ export function getAllAttributeDefs() {
 }
 
 /**
+ * 获取按 display.order 排序的属性定义（M5-4 面板驱动）。
+ * 无 display.order 的属性排最后（按 key 字典序）。
+ * @returns {Array} 属性定义数组
+ */
+export function getDisplayOrderedDefs() {
+    return getAllAttributeDefs().sort((a, b) => {
+        const oa = a.display?.order ?? 9999;
+        const ob = b.display?.order ?? 9999;
+        if (oa !== ob) return oa - ob;
+        return a.key.localeCompare(b.key);
+    });
+}
+
+/**
+ * 组装某角色属性的渲染数据（M5-4）：{ key, label, type, value, def, display }。
+ * @param {object} state
+ * @param {string} roleKey
+ * @returns {Array}
+ */
+export function getRoleDisplayData(state, roleKey) {
+    const values = getRoleValues(state, roleKey);
+    if (!values) return [];
+    return getDisplayOrderedDefs().map(def => ({
+        key: def.key,
+        label: def.label || def.key,
+        type: def.type,
+        value: values[def.key] !== undefined ? values[def.key] : (def.default ?? defaultForType(def.type)),
+        def,
+        display: def.display || { widget: def.type === 'number' ? 'bar' : def.type === 'enum' ? 'tag' : 'number', order: 9999 },
+    }));
+}
+
+/**
  * 创建某角色的属性实例（值按 default 初始化）。
  * @returns {object} key -> current 值
  */

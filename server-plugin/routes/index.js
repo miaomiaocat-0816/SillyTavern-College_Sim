@@ -21,6 +21,8 @@ import { pushEvent, sortQueue, arbitrate } from '../lib/events.js';
 import { scanPool, filterPoolByScene, shouldTrigger, markTriggered } from '../lib/pool.js';
 import { activateEncounter, deactivateEncounter, isEncounterExpired, promoteToResident } from '../lib/encounter.js';
 import { parseIntent, buildIntentPrompt, buildNpcSpeechPrompt } from '../lib/intent.js';
+import { resolveBinding, setBinding, getBindings, validateBindings, USE_TYPES } from '../lib/binding.js';
+import { getDisplayOrderedDefs, getRoleDisplayData } from '../lib/attributes.js';
 
 /** 从请求中提取 chatId */
 function extractChatId(req) {
@@ -188,6 +190,15 @@ export function registerRoutes(router) {
     // ===== 属性 =====
     router.get('/attributes', wrap(async (req, res) => {
         ok(res, getAllAttributeDefs());
+    }));
+
+    // 注意：/attributes/display 必须先于 /attributes/:path 注册，否则被 :path 拦截
+    router.get('/attributes/display', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        ensureAttributes(state);
+        const role = req.query?.role || 'self';
+        ok(res, getRoleDisplayData(state, role));
     }));
 
     router.get('/attributes/:path', wrap(async (req, res) => {
@@ -427,6 +438,33 @@ export function registerRoutes(router) {
             return st.intent[role || 'npc'];
         });
         ok(res, { role: role || 'npc', ...result });
+    }));
+
+    // ===== M5：连接配置绑定 =====
+    router.get('/bindings', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        ok(res, getBindings(state));
+    }));
+
+    router.post('/bindings/set', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { dim, key, profileId } = req.body || {};
+        if (!dim || !key) return fail(res, 400, 'INVALID_BINDING', '缺少 dim 或 key');
+        if (dim !== 'byUse' && dim !== 'byRole') return fail(res, 400, 'INVALID_DIM', 'dim 必须是 byUse 或 byRole');
+        const result = await mutate(chatId, (st) => {
+            return setBinding(st, dim, key, profileId ?? null);
+        });
+        ok(res, result);
+    }));
+
+    // 解析绑定（给定 role + useType，返回最终 profileId 及来源）
+    router.get('/bindings/resolve', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        const role = req.query?.role || 'self';
+        const useType = req.query?.useType || USE_TYPES.MAIN_EVENT;
+        ok(res, resolveBinding(state.bindings, role, useType));
     }));
 
     // ===== 404 兜底 =====

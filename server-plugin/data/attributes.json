@@ -17,7 +17,8 @@
       "llmAdjustable": true,
       "deltaLimits": { "single": 10, "perRp24h": 30 },
       "requires": [],
-      "onZero": { "event": "collapse" }
+      "onZero": { "event": "collapse" },
+      "display": { "widget": "bar", "color": "#e84393", "order": 1 }
     },
     {
       "key": "stamina",
@@ -31,7 +32,8 @@
       "llmAdjustable": true,
       "deltaLimits": { "single": 20, "perRp24h": 100 },
       "requires": [],
-      "onZero": { "event": "collapse" }
+      "onZero": { "event": "collapse" },
+      "display": { "widget": "bar", "color": "#7fb4e8", "order": 2 }
     },
     {
       "key": "mood",
@@ -40,7 +42,8 @@
       "type": "enum",
       "options": ["低落", "平静", "愉快", "兴奋"],
       "default": "平静",
-      "llmAdjustable": true
+      "llmAdjustable": true,
+      "display": { "widget": "tag", "color": "#f0b429", "order": 3 }
     },
     {
       "key": "affinity",
@@ -52,7 +55,8 @@
       "default": 20,
       "decay": { "perRp24hNoInteraction": -1, "floor": 0 },
       "llmAdjustable": true,
-      "deltaLimits": { "single": 5, "perRp24h": 15 }
+      "deltaLimits": { "single": 5, "perRp24h": 15 },
+      "display": { "widget": "bar", "color": "#e84393", "order": 10 }
     }
   ]
 }
