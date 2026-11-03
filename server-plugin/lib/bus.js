@@ -55,6 +55,10 @@ export function createDefaultState() {
         events: [],           // 事件队列（M3 消费）
         audit: [],            // 裁决审计日志（M3-13）
         _dailyDeltas: {},     // 当日属性累计变化（M3-11 裁决器用，运行时字段）
+        pool: [],             // 陌生人池（M4：角色卡快照）
+        encounterLog: [],     // 相遇记录（M4-4：<100字摘要）
+        activeEncounter: null,// 当前活跃陌生人注入（M4-4）
+        intent: {},           // NPC 意图判定结果（M4-7，key=role）
     };
 }
 
@@ -98,6 +102,9 @@ function migrate(state) {
     if (!state.attributes.self) state.attributes.self = {};
     if (!state.audit) state.audit = [];
     if (!state._dailyDeltas) state._dailyDeltas = {};
+    if (!state.pool) state.pool = [];
+    if (!state.encounterLog) state.encounterLog = [];
+    if (!state.intent) state.intent = {};
     return state;
 }
 

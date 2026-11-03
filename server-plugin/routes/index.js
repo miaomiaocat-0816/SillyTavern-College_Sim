@@ -18,6 +18,9 @@ import { parseProposal, normalizeEffect, PROPOSAL_PROMPT_TEMPLATE } from '../lib
 import { applyEffects, getAudit } from '../lib/arbiter.js';
 import { loadAllConstraints, getActiveLoreText, applyLoreConstraints } from '../lib/lore.js';
 import { pushEvent, sortQueue, arbitrate } from '../lib/events.js';
+import { scanPool, filterPoolByScene, shouldTrigger, markTriggered } from '../lib/pool.js';
+import { activateEncounter, deactivateEncounter, isEncounterExpired, promoteToResident } from '../lib/encounter.js';
+import { parseIntent, buildIntentPrompt, buildNpcSpeechPrompt } from '../lib/intent.js';
 
 /** 从请求中提取 chatId */
 function extractChatId(req) {
@@ -285,8 +288,174 @@ export function registerRoutes(router) {
         ok(res, result);
     }));
 
+    // ===== M4：角色池 =====
+    router.get('/pool', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const scene = req.query?.scene || null;
+        // 扫描磁盘上的角色卡，同步进 state.pool
+        const { cards, warnings } = scanPool();
+        const state = await getState(chatId);
+        // 合并磁盘卡与运行时状态（保留 enabled/cooldown 等运行时字段）
+        const merged = mergePool(state.pool, cards);
+        const result = await mutate(chatId, (st) => { st.pool = merged; });
+        const filtered = filterPoolByScene(result.pool || merged, scene);
+        ok(res, { cards: filtered, total: (result.pool || merged).length, warnings });
+    }));
+
+    // 刷新角色池（重新扫描磁盘）
+    router.post('/pool/refresh', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { cards, warnings } = scanPool();
+        const result = await mutate(chatId, (st) => {
+            st.pool = mergePool(st.pool, cards);
+            return st.pool;
+        });
+        ok(res, { cards: result, warnings });
+    }));
+
+    // 手动移出/恢复某张卡
+    router.post('/pool/toggle', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { cardId, enabled } = req.body || {};
+        if (!cardId) return fail(res, 400, 'INVALID_CARD', '缺少 cardId');
+        const result = await mutate(chatId, (st) => {
+            const card = (st.pool || []).find(c => c.id === cardId);
+            if (!card) return { ok: false, error: { code: 'CARD_NOT_FOUND' } };
+            card.enabled = (enabled === undefined) ? !card.enabled : !!enabled;
+            return { ok: true, card };
+        });
+        if (!result.ok) return fail(res, 404, result.error.code, '卡片不存在');
+        ok(res, result.card);
+    }));
+
+    // 立即尝试触发陌生人（场景 + 概率 + 冷却判定）
+    router.post('/pool/trigger', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { scene, cardId } = req.body || {};
+        if (!scene) return fail(res, 400, 'INVALID_SCENE', '缺少 scene');
+        const state = await getState(chatId);
+        const now = Date.now();
+
+        // 先刷新池
+        const { cards } = scanPool();
+        const merged = mergePool(state.pool, cards);
+
+        const result = await mutate(chatId, (st) => {
+            st.pool = merged;
+            const candidates = cardId
+                ? st.pool.filter(c => c.id === cardId)
+                : st.pool;
+            for (const card of candidates) {
+                const decision = shouldTrigger(card, scene, now);
+                if (decision.triggered) {
+                    markTriggered(card, now, 5 * 60 * 1000); // 注入持续 5 分钟
+                    activateEncounter(st, card, scene, now, 5 * 60 * 1000);
+                    return { ok: true, triggered: true, card: card.name, reason: decision.reason };
+                }
+            }
+            return { ok: true, triggered: false, reason: 'no_candidate' };
+        });
+
+        ok(res, result);
+    }));
+
+    // ===== M4：当前活跃相遇 =====
+    router.get('/encounter', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        ok(res, {
+            active: state.activeEncounter,
+            log: state.encounterLog || [],
+        });
+    }));
+
+    // 结束当前相遇
+    router.post('/encounter/end', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { summary } = req.body || {};
+        const result = await mutate(chatId, (st) => {
+            return deactivateEncounter(st, summary);
+        });
+        ok(res, result);
+    }));
+
+    // ===== M4：转常驻 =====
+    router.post('/pool/promote', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { cardId } = req.body || {};
+        if (!cardId) return fail(res, 400, 'INVALID_CARD', '缺少 cardId');
+        const result = await mutate(chatId, (st) => {
+            return promoteToResident(st, cardId);
+        });
+        if (!result.converted) {
+            return fail(res, 400, result.reason, '无法转常驻');
+        }
+        ok(res, { converted: true, cardId });
+    }));
+
+    // ===== M4：意图判定 =====
+    router.post('/intent/parse', wrap(async (req, res) => {
+        const { raw } = req.body || {};
+        ok(res, parseIntent(raw));
+    }));
+
+    router.get('/intent/prompt', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        const role = req.query?.role || 'npc';
+        const aff = state.attributes?.[role]?.affinity ?? 0;
+        ok(res, { prompt: buildIntentPrompt({ name: role, affinity: aff }, state) });
+    }));
+
+    // 记录意图判定结果（前端调 generateQuietPrompt 后回传，只入事件队列，不直接写状态）
+    router.post('/intent/record', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { role, intent, raw } = req.body || {};
+        const parsed = parseIntent(raw || intent);
+        const result = await mutate(chatId, (st) => {
+            if (!st.intent) st.intent = {};
+            st.intent[role || 'npc'] = { intent: parsed.intent, parsed: parsed.parsed, at: Date.now() };
+            // 判定为 talk → 入事件队列（发言由仲裁器/前端消费）
+            if (parsed.intent === 'talk') {
+                pushEvent(st, {
+                    type: 'npc_speak',
+                    priority: 10,
+                    payload: { role: role || 'npc', intent: parsed.intent },
+                    narrativeHint: `${role || 'npc'} 想主动搭话`,
+                });
+            }
+            return st.intent[role || 'npc'];
+        });
+        ok(res, { role: role || 'npc', ...result });
+    }));
+
     // ===== 404 兜底 =====
     router.use((req, res) => {
         fail(res, 404, 'NOT_FOUND', '路由不存在');
+    });
+}
+
+/**
+ * 合并磁盘卡与运行时状态：以磁盘卡为准更新静态字段，保留运行时字段
+ * （enabled/active/lastTriggered/cooldownMs/lastInteraction）。
+ */
+function mergePool(existing, diskCards) {
+    const map = new Map();
+    for (const c of existing || []) map.set(c.id, c);
+    return diskCards.map(c => {
+        const prev = map.get(c.id);
+        if (prev) {
+            // 保留运行时字段
+            return {
+                ...c,
+                enabled: prev.enabled,
+                active: prev.active,
+                activeUntil: prev.activeUntil,
+                lastTriggered: prev.lastTriggered,
+                cooldownMs: prev.cooldownMs,
+                lastInteraction: prev.lastInteraction,
+            };
+        }
+        return c;
     });
 }

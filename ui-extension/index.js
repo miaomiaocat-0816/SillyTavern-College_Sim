@@ -166,6 +166,74 @@ async function refreshAuditTab() {
     }
 }
 
+// ============ 角色池（M4-3）============
+
+async function refreshPoolTab() {
+    try {
+        const [poolRes, encRes] = await Promise.all([
+            api('GET', '/pool'),
+            api('GET', '/encounter'),
+        ]);
+        const $el = $('#us-pool-list');
+        $el.empty();
+        if (!poolRes.ok) return;
+
+        const cards = poolRes.data.cards;
+        const active = encRes.data?.active;
+
+        // 活跃相遇提示
+        if (active) {
+            $el.append(`<div class="us-encounter-active">偶遇中：${active.name}</div>`);
+        }
+
+        if (cards.length === 0) {
+            $el.append('<div class="us-empty">陌生人池为空（无角色卡或卡无场景标签）</div>');
+        }
+        for (const c of cards) {
+            const scenes = (c.scenes || []).join('、') || '无场景';
+            const status = c.active ? '● 活跃' : (c.enabled ? '○' : '✕ 禁用');
+            $el.append(`
+                <div class="us-pool-row" data-card="${c.id}">
+                    <div class="us-pool-head">
+                        <span class="us-pool-name">${c.name}</span>
+                        <span class="us-pool-status">${status}</span>
+                    </div>
+                    <div class="us-pool-scenes">场景：${scenes} | 概率：${c.probability}</div>
+                    <div class="us-pool-actions">
+                        <button class="us-btn us-btn-trigger" data-card="${c.id}">触发</button>
+                        <button class="us-btn us-btn-promote" data-card="${c.id}">转常驻</button>
+                    </div>
+                </div>
+            `);
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新角色池失败`, e);
+    }
+}
+
+// 触发陌生人（用当前时间推断场景，简化：默认 campus 场景）
+async function triggerEncounter(cardId) {
+    const scene = 'campus';
+    const result = await api('POST', '/pool/trigger', { scene, cardId });
+    if (result.ok && result.data.triggered) {
+        toastr?.info(`偶遇了 ${result.data.card}`);
+    } else {
+        toastr?.warning('未触发（场景不匹配或冷却中）');
+    }
+    refreshPoolTab();
+}
+
+// 转常驻
+async function promoteCard(cardId) {
+    const result = await api('POST', '/pool/promote', { cardId });
+    if (result.ok) {
+        toastr?.success(`已将 ${cardId} 转为常驻角色`);
+    } else {
+        toastr?.warning(`转常驻失败：${result.error?.code || ''}（好感需达阈值）`);
+    }
+    refreshPoolTab();
+}
+
 async function setRate(rate) { await api('POST', '/time', { action: 'setRate', value: rate }); refreshTimeTab(); }
 async function pause() { await api('POST', '/time', { action: 'pause' }); refreshTimeTab(); }
 async function resume() { await api('POST', '/time', { action: 'resume' }); refreshTimeTab(); }
@@ -182,6 +250,7 @@ function buildPanel() {
             <div class="us-tab active" data-tab="time">时间</div>
             <div class="us-tab" data-tab="inventory">背包</div>
             <div class="us-tab" data-tab="delivery">快递</div>
+            <div class="us-tab" data-tab="pool">角色池</div>
             <div class="us-tab" data-tab="audit">裁决</div>
         </div>
         <div class="us-tab-content">
@@ -206,6 +275,9 @@ function buildPanel() {
             <div class="us-pane" data-pane="delivery" style="display:none;">
                 <div class="us-empty">快递（M3 后续完善）</div>
             </div>
+            <div class="us-pane" data-pane="pool" style="display:none;">
+                <div id="us-pool-list" class="us-list"></div>
+            </div>
             <div class="us-pane" data-pane="audit" style="display:none;">
                 <div id="us-audit-list" class="us-list"></div>
             </div>
@@ -224,11 +296,20 @@ function buildPanel() {
         $(`.us-pane[data-pane="${tab}"]`).show();
         if (tab === 'inventory') refreshInventoryTab();
         if (tab === 'audit') refreshAuditTab();
+        if (tab === 'pool') refreshPoolTab();
     });
 
     $('#us-btn-pause').on('click', pause);
     $('#us-btn-resume').on('click', resume);
     $('#us-rate-select').on('change', function () { setRate(Number($(this).val())); });
+
+    // 角色池按钮（事件委托）
+    $panel.on('click', '.us-btn-trigger', function () {
+        triggerEncounter($(this).data('card'));
+    });
+    $panel.on('click', '.us-btn-promote', function () {
+        promoteCard($(this).data('card'));
+    });
 }
 
 // ============ 斜杠命令（M3-7）============
@@ -334,6 +415,51 @@ function registerCommands() {
     }));
 }
 
+// ============ NPC 主动发言（M4-8）============
+
+/**
+ * 消费事件队列里的 npc_speak 事件：
+ * 对判定为 talk 的 NPC，用 generateQuietPrompt 生成发言，
+ * 再以系统消息形式发出（不污染主对话上下文）。
+ */
+let speakingInProgress = false;
+
+async function processNpcSpeakEvents() {
+    if (speakingInProgress) return; // 防并发
+    speakingInProgress = true;
+    try {
+        const result = await api('GET', '/events');
+        if (!result.ok) return;
+        const speakEvents = (result.data.events || []).filter(e => e.type === 'npc_speak');
+        if (speakEvents.length === 0) return;
+
+        for (const evt of speakEvents) {
+            const role = evt.payload?.role || 'npc';
+            // 静默调用 LLM 生成发言（不污染聊天记录）
+            let speech = '';
+            try {
+                const prompt = `你是群聊中的角色「${role}」，请以第一人称主动说一句话（不要带动作描写前缀，直接说内容，不超过40字）。`;
+                speech = await context.generateQuietPrompt({ quietPrompt: prompt, forceName2: true });
+            } catch (e) {
+                console.error(`[${MODULE_NAME}] NPC 发言生成失败`, e);
+            }
+
+            // 发出系统消息（NPC 发言）
+            if (speech && typeof speech === 'string' && speech.trim()) {
+                context.sendSystemMessage('user', `${role}：${speech.trim()}`);
+                console.log(`[${MODULE_NAME}] NPC「${role}」主动发言：${speech.trim()}`);
+            }
+
+            // 消费事件（幂等，避免重复发言）
+            await api('POST', '/events/consume', {});
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] NPC 发言事件处理失败`, e);
+    } finally {
+        speakingInProgress = false;
+    }
+}
+
 // ============ 初始化 ============
 
 async function init() {
@@ -356,6 +482,9 @@ async function init() {
 
     // 每 5 秒刷新注入（时间推进后摘要更新）
     setInterval(refreshInjection, 5000);
+
+    // 每 10 秒检查 NPC 发言事件（M4-8）
+    setInterval(processNpcSpeakEvents, 10000);
 
     // 监听生成前事件：注入 prompt（M3-4）
     context.eventSource.on(context.event_types.GENERATION_STARTED, () => {
