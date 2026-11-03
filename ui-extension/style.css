@@ -1,0 +1,102 @@
+/* university-sim 前端面板样式（M1-7 ~ M1-8） */
+
+#university-sim-panel {
+    position: fixed;
+    right: 10px;
+    top: 60px;
+    width: 280px;
+    z-index: 3000;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.92));
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    color: var(--SmartThemeBodyColor, #ddd);
+    font-size: 14px;
+    overflow: hidden;
+}
+
+#university-sim-panel .us-panel-title {
+    font-weight: 600;
+    padding: 10px 14px;
+    display: block;
+}
+
+#university-sim-panel .drawer-header {
+    background: var(--SmartThemeQuoteColor, #333);
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    user-select: none;
+}
+
+#university-sim-panel .us-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    background: rgba(0, 0, 0, 0.2);
+}
+
+#university-sim-panel .us-tab {
+    flex: 1;
+    text-align: center;
+    padding: 8px 0;
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+}
+
+#university-sim-panel .us-tab:hover {
+    opacity: 1;
+}
+
+#university-sim-panel .us-tab.active {
+    opacity: 1;
+    font-weight: 600;
+    border-bottom: 2px solid var(--SmartThemeQuoteColor, #7fa);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+#university-sim-panel .us-tab-content {
+    padding: 14px;
+    min-height: 120px;
+}
+
+#university-sim-panel .us-time-big {
+    font-size: 22px;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 4px;
+}
+
+#university-sim-panel .us-time-sub {
+    font-size: 12px;
+    text-align: center;
+    opacity: 0.7;
+    margin-bottom: 14px;
+}
+
+#university-sim-panel .us-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+}
+
+#university-sim-panel .us-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: var(--SmartThemeQuoteColor, #333);
+    color: inherit;
+    cursor: pointer;
+}
+
+#university-sim-panel .us-btn:hover {
+    filter: brightness(1.2);
+}
+
+#university-sim-panel .us-select {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: var(--SmartThemeQuoteColor, #333);
+    color: inherit;
+}

@@ -1,0 +1,11 @@
+# 运行时数据（状态落盘），不进版本库
+server-plugin/data/
+*.tmp
+
+# Node
+node_modules/
+npm-debug.log*
+
+# 系统文件
+.DS_Store
+Thumbs.db
