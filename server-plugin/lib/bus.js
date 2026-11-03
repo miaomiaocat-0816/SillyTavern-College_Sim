@@ -45,12 +45,16 @@ export function createDefaultState() {
             rate: 1,          // 倍率（1 现实分钟 = rate RP 分钟）
             paused: false,
         },
-        money: 0,
+        money: 200,           // 初始余额（M2 购买用）
         inventory: [],        // 物品实例
         deliveries: [],       // 在途快递
-        schedule: [],         // 课表
-        attributes: {},       // 人物属性（M2 填充）
-        events: [],           // 事件队列（M3 填充）
+        flags: {},            // 运行时标记（inClass 等）
+        attributes: {         // 人物属性（M2：self + NPC）
+            self: {},
+        },
+        events: [],           // 事件队列（M3 消费）
+        audit: [],            // 裁决审计日志（M3-13）
+        _dailyDeltas: {},     // 当日属性累计变化（M3-11 裁决器用，运行时字段）
     };
 }
 
@@ -65,6 +69,7 @@ export async function getState(chatId) {
     if (fs.existsSync(fp)) {
         try {
             state = JSON.parse(fs.readFileSync(fp, 'utf8'));
+            state = migrate(state); // 旧存档补齐新字段
         } catch (e) {
             console.error(`[university-sim] 状态文件损坏，重建默认：${fp}`, e);
             state = createDefaultState();
@@ -77,9 +82,30 @@ export async function getState(chatId) {
 }
 
 /**
+ * 状态迁移/补齐：旧存档缺少新字段时，用默认值补齐（不报错）。
+ * M2-19 验收：旧存档（无 hunger 等）加载后自动补齐 default。
+ */
+function migrate(state) {
+    const defaults = createDefaultState();
+    for (const key of Object.keys(defaults)) {
+        if (state[key] === undefined) {
+            state[key] = defaults[key];
+        }
+    }
+    // 嵌套补齐
+    if (!state.flags) state.flags = {};
+    if (!state.attributes) state.attributes = {};
+    if (!state.attributes.self) state.attributes.self = {};
+    if (!state.audit) state.audit = [];
+    if (!state._dailyDeltas) state._dailyDeltas = {};
+    return state;
+}
+
+/**
  * 唯一写入入口：bus.mutate(chatId, mutator)
  * mutator 同步修改 state（内存态），本函数负责落盘与串行化。
- * 返回修改后的 state（深拷贝，防外部持有可写引用）。
+ * mutator 可以有返回值（如动作处理结果），本函数会透传该返回值；
+ * 若无返回值则返回修改后的 state（深拷贝，防外部持有可写引用）。
  */
 export async function mutate(chatId, mutator) {
     const state = await getState(chatId);
@@ -94,11 +120,12 @@ export async function mutate(chatId, mutator) {
 
     try {
         // 执行写入（mutator 内直接改 state，符合计划书「函数内加锁」语义）
-        mutator(state);
+        const result = mutator(state);
         state.updatedAt = Date.now();
         // 落盘
         await persist(chatId, state);
-        return clone(state);
+        // 透传 mutator 返回值；无返回值则返回 state 快照
+        return result !== undefined ? result : clone(state);
     } finally {
         release();
     }

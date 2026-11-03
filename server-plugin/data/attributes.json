@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "groups": {
+    "player": { "label": "玩家", "appliesTo": "player" },
+    "npc": { "label": "NPC", "appliesTo": "character" }
+  },
+  "attributes": [
+    {
+      "key": "health",
+      "label": "健康",
+      "group": "player",
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 80,
+      "decay": { "perRp24h": -2, "floor": 0 },
+      "llmAdjustable": true,
+      "deltaLimits": { "single": 10, "perRp24h": 30 },
+      "requires": [],
+      "onZero": { "event": "collapse" }
+    },
+    {
+      "key": "stamina",
+      "label": "体力",
+      "group": "player",
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 100,
+      "decay": { "perRp24h": -30, "perSleep": 60 },
+      "llmAdjustable": true,
+      "deltaLimits": { "single": 20, "perRp24h": 100 },
+      "requires": [],
+      "onZero": { "event": "collapse" }
+    },
+    {
+      "key": "mood",
+      "label": "心情",
+      "group": "player",
+      "type": "enum",
+      "options": ["低落", "平静", "愉快", "兴奋"],
+      "default": "平静",
+      "llmAdjustable": true
+    },
+    {
+      "key": "affinity",
+      "label": "好感度",
+      "group": "npc",
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 20,
+      "decay": { "perRp24hNoInteraction": -1, "floor": 0 },
+      "llmAdjustable": true,
+      "deltaLimits": { "single": 5, "perRp24h": 15 }
+    }
+  ]
+}

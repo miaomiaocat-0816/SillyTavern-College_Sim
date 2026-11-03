@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "items": [
+    { "id": "instant_noodle", "name": "泡面", "type": "consumable", "price": 5, "description": "速食泡面，充饥用" },
+    { "id": "bread", "name": "面包", "type": "consumable", "price": 3, "description": "普通面包" },
+    { "id": "bottled_water", "name": "矿泉水", "type": "consumable", "price": 2, "description": "瓶装水" },
+    { "id": "coffee", "name": "咖啡", "type": "consumable", "price": 8, "description": "提神咖啡" },
+    { "id": "energy_drink", "name": "能量饮料", "type": "consumable", "price": 10, "description": "快速恢复体力" },
+    { "id": "notebook", "name": "笔记本", "type": "consumable", "price": 6, "description": "课堂笔记用" },
+    { "id": "pen", "name": "中性笔", "type": "consumable", "price": 2, "description": "书写用笔" },
+    { "id": "umbrella", "name": "雨伞", "type": "durable", "price": 25, "maxDurability": 20, "description": "遮风挡雨" },
+    { "id": "power_bank", "name": "充电宝", "type": "durable", "price": 80, "maxDurability": 50, "description": "应急充电" },
+    { "id": "phone", "name": "手机", "type": "unique", "price": 3000, "description": "必备通讯工具" },
+    { "id": "laptop", "name": "笔记本电脑", "type": "unique", "price": 6000, "description": "学习和娱乐" },
+    { "id": "student_card", "name": "学生卡", "type": "unique", "price": 0, "description": "校园通行证" },
+    { "id": "textbook_math", "name": "高等数学教材", "type": "unique", "price": 45, "description": "数学课教材" },
+    { "id": "textbook_english", "name": "大学英语教材", "type": "unique", "price": 40, "description": "英语课教材" },
+    { "id": "basketball", "name": "篮球", "type": "durable", "price": 60, "maxDurability": 40, "description": "运动用品" },
+    { "id": "chair", "name": "折叠椅", "type": "durable", "price": 35, "maxDurability": 30, "description": "宿舍备用" },
+    { "id": "battery", "name": "电池", "type": "durable_stack", "price": 4, "maxDurability": 1, "description": "AA 电池，可堆叠" },
+    { "id": "mask", "name": "口罩", "type": "durable_stack", "price": 3, "maxDurability": 3, "description": "一次性口罩，可堆叠" },
+    { "id": "bandage", "name": "创可贴", "type": "durable_stack", "price": 2, "maxDurability": 1, "description": "小伤口处理" },
+    { "id": "snack", "name": "零食", "type": "durable_stack", "price": 7, "maxDurability": 5, "description": "课间小食" }
+  ]
+}

@@ -38,7 +38,11 @@ export function start(chatId) {
 /**
  * 执行一次 tick：未暂停则推进时间。
  * 推进量 = rate（倍率）。即 60s 现实 = rate RP 分钟。
+ * 同时结算：快递到站、课程状态、属性衰减。
  */
+import { settleArrivals } from './delivery.js';
+import { updateClassState } from './schedule.js';
+
 export async function tick(chatId) {
     await mutate(chatId, (state) => {
         const t = state.time;
@@ -46,13 +50,17 @@ export async function tick(chatId) {
         const before = t.epochMinute;
         t.epochMinute += Math.max(0, t.rate || 0);
         const after = t.epochMinute;
-        // 记录 tick 事件（供后续子系统消费；M1 仅记录）
+        // 记录 tick 事件
         (state.events ||= []).push({
             id: `tick_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             type: 'tick',
             ts: Date.now(),
             payload: { from: before, to: after, elapsed: after - before },
         });
+        // 快递到站结算（M2-9）
+        settleArrivals(state);
+        // 课程状态判定（M2-13）
+        updateClassState(state);
     });
 }
 

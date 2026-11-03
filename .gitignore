@@ -1,5 +1,6 @@
-# 运行时数据（状态落盘），不进版本库
-server-plugin/data/
+# 运行时状态文件（bus 落盘的聊天状态），不进版本库
+server-plugin/data/default.json
+server-plugin/data/*.json.tmp
 *.tmp
 
 # Node

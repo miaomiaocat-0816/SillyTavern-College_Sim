@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "uid": "lore_dorm_lights_out",
+      "constant": true,
+      "content": "宿舍楼每晚 23:30 熄灯，熄灯后宿舍保持安静，禁止学习或大声活动。\n\n<!--us\n{ \"type\": \"block\", \"action\": \"study\", \"during\": \"23:30-06:00\" }\nus-->\n\n熄灯期间宿管会巡查，请同学们自觉遵守。"
+    },
+    {
+      "uid": "lore_monthly_allowance",
+      "constant": true,
+      "content": "每月 1 号学校会发放生活费。生活费由系统自动发放，学生不能自行修改金额。\n\n<!--us\n{ \"type\": \"allowance\", \"trigger\": \"monthStart\", \"amount\": 2000 }\nus-->\n\n生活费是固定的，请同学们合理规划。"
+    },
+    {
+      "uid": "lore_study_stamina",
+      "constant": false,
+      "content": "认真学习会消耗一定体力。长时间学习需要适当休息。\n\n<!--us\n{ \"type\": \"constraint\", \"target\": \"self.stamina\", \"max\": 20 }\nus-->\n\n劳逸结合才能保持学习效率。"
+    }
+  ]
+}

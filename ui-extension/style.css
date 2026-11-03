@@ -100,3 +100,61 @@
     background: var(--SmartThemeQuoteColor, #333);
     color: inherit;
 }
+
+/* M3 新增：金钱、列表、审计、数值警示 */
+#university-sim-panel .us-money {
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--SmartThemeQuoteColor, #7fa);
+    margin-bottom: 10px;
+}
+
+#university-sim-panel .us-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#university-sim-panel .us-item-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#university-sim-panel .us-item-count {
+    opacity: 0.7;
+    font-weight: 600;
+}
+
+#university-sim-panel .us-empty {
+    text-align: center;
+    opacity: 0.5;
+    padding: 20px 0;
+    font-size: 13px;
+}
+
+#university-sim-panel .us-audit-row {
+    display: flex;
+    gap: 8px;
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 12px;
+}
+
+#university-sim-panel .us-audit-row.applied { color: #7fbf7f; }
+#university-sim-panel .us-audit-row.clamped { color: #d9a64a; }
+#university-sim-panel .us-audit-row.rejected { color: #d97f7f; }
+
+/* 数值泄露警示标记（M3-6） */
+.us-numeric-warning {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #e6b800;
+    margin-left: 6px;
+    cursor: help;
+    vertical-align: middle;
+    box-shadow: 0 0 6px rgba(230, 184, 0, 0.7);
+}

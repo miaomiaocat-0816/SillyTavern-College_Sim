@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "courses": [
+    { "id": "math_1", "name": "高等数学", "dayOfWeek": 1, "startMinute": 480, "endMinute": 600, "weeks": "all" },
+    { "id": "english_1", "name": "大学英语", "dayOfWeek": 2, "startMinute": 480, "endMinute": 600, "weeks": "all" },
+    { "id": "pe_1", "name": "体育", "dayOfWeek": 3, "startMinute": 840, "endMinute": 960, "weeks": "all" },
+    { "id": "cs_1", "name": "程序设计", "dayOfWeek": 4, "startMinute": 480, "endMinute": 600, "weeks": "all" },
+    { "id": "physics_1", "name": "大学物理", "dayOfWeek": 5, "startMinute": 480, "endMinute": 600, "weeks": "all" },
+    { "id": "lab_odd", "name": "物理实验", "dayOfWeek": 3, "startMinute": 600, "endMinute": 720, "weeks": "odd" }
+  ]
+}
