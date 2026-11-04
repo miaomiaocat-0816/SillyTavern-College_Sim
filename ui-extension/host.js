@@ -83,7 +83,7 @@ async function tryImport(paths) {
 function pickGlobals() {
     const g = globalThis;
     const out = {};
-    if (typeof g.getContext === 'function') out.getContext = g.getContext;
+    if (typeof g.SillyTavern?.getContext === 'function') out.getContext = g.SillyTavern.getContext;
     if (typeof g.dragElement === 'function') out.dragElement = g.dragElement;
     if (g.extension_prompt_types) out.extension_prompt_types = g.extension_prompt_types;
     if (g.extension_prompt_roles) out.extension_prompt_roles = g.extension_prompt_roles;
@@ -145,7 +145,7 @@ export async function ensureHost() {
             result.via.push(`${key}(module)`);
         }
     }
-    // getContext 也兜底
+    // getContext 也兜底（globals 已由 pickGlobals 修正为 SillyTavern.getContext）
     if (typeof globals.getContext === 'function') {
         result.getContext = globals.getContext;
     }

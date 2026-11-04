@@ -792,7 +792,7 @@ function buildPanel() {
 // ============ 斜杠命令（M3-7）============
 
 function registerCommands() {
-    const chatId = () => (getContext().chatId || 'default');
+    const chatId = () => (context?.chatId || 'default');
     // 从宿主探测结果解构符号（host.js 多路径探测 + 全局兜底）
     const { SlashCommandParser, SlashCommand, SlashCommandArgument, system_message_types } = HOST;
     if (!SlashCommandParser || !SlashCommand || !SlashCommandArgument) {
@@ -810,7 +810,7 @@ function registerCommands() {
             if (!result.ok) return `查询失败：${result.error?.message || '未知错误'}`;
             const summary = result.data.summary;
             // 以系统消息样式输出
-            getContext().sendSystemMessage(system_message_types.GENERIC, summary);
+            context.sendSystemMessage(system_message_types.GENERIC, summary);
             return summary;
         },
     }));
@@ -909,7 +909,7 @@ function registerCommands() {
             if (!Number.isFinite(days) || days <= 0) return '用法：/us-skip <天数>，例如 /us-skip 2d 或 /us-skip 0.5';
             const result = await api('POST', '/skip', { chatId: chatId(), days });
             if (!result.ok) return `快进失败：${result.error?.message || '未知错误'}`;
-            getContext().sendSystemMessage(system_message_types.GENERIC, result.data.summary);
+            context.sendSystemMessage(system_message_types.GENERIC, result.data.summary);
             return result.data.summary;
         },
     }));
@@ -992,7 +992,7 @@ async function init() {
     HOST = await ensureHost();
     console.log(`[${MODULE_NAME}] 宿主探测完成（${describeHost()}）`);
 
-    context = getContext();
+    context = SillyTavern.getContext();
 
     // 失败隔离：每个独立步骤各自 try/catch，任何一步炸了只影响那一块，
     // 面板照常可用、命令照常注册、注入照常跑（借鉴 ILB「管线每步独立 try/catch」）。
