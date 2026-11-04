@@ -46,6 +46,106 @@ async function api(method, path, body) {
     return res.json();
 }
 
+// ============ 多模型调用（M5 补完：按 profile 分流）============
+
+/**
+ * 为什么用 ConnectionManagerRequestService 而不是 generateQuietPrompt：
+ * generateQuietPrompt（script.js:3084）的签名里【没有 profile 参数】，固定走「当前
+ * 选中的连接」。而下拉切换 profile 只是改配置、并不会让多个 profile 同时处于可用
+ * 状态——所以靠它无法做到「意图用 flash、主事件用 pro」的并发分流。
+ *
+ * ST 官方给的正解是 context.ConnectionManagerRequestService.sendRequest(profileId, ...)：
+ * 它【不依赖当前连接状态】，只要 profile 存在于 connectionManager.profiles 里（有合法
+ * api / api-url / model / secret-id）就能直接按 profileId 发请求，天然支持并发 + 中断。
+ */
+
+/** 用途类型（与后端 lib/binding.js 的 USE_TYPES 对齐） */
+const USE_TYPES = {
+    MAIN_EVENT: 'main_event',
+    INTENT: 'intent',
+    SUMMARY: 'summary',
+};
+
+/** 绑定缓存（{byUse, byRole}），由 refreshBindings() 刷新 */
+let cachedBindings = { byUse: {}, byRole: {} };
+
+/** 拉取后端绑定关系到缓存 */
+async function refreshBindings() {
+    try {
+        const result = await api('GET', '/bindings');
+        if (result.ok) cachedBindings = result.data || { byUse: {}, byRole: {} };
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新绑定失败`, e);
+    }
+    return cachedBindings;
+}
+
+/**
+ * 解析某个（角色 + 用途）应使用的 profileId。
+ * 优先级：角色级 > 用途级 > null（走当前选中连接兜底）。
+ * 直接调后端 /bindings/resolve，保证与后端逻辑一致。
+ */
+async function resolveProfile(role, useType) {
+    try {
+        const q = new URLSearchParams({ useType });
+        if (role) q.set('role', role);
+        const result = await api('GET', `/bindings/resolve?${q.toString()}`);
+        if (result.ok) return result.data?.profileId ?? null;
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 解析绑定失败`, e);
+    }
+    return null;
+}
+
+/**
+ * 用指定 profile 真正调用 LLM 生成文本。
+ * profileId 为 null 时退回「当前选中的连接」：走 context.generateQuietPrompt。
+ * 否则走 ConnectionManagerRequestService.sendRequest（按 profile 发请求，不碰连接状态）。
+ *
+ * @param {string|null} profileId 目标连接配置 id（null=当前连接）
+ * @param {string} prompt 提示词（单条 user 消息）
+ * @param {number} maxTokens 最大输出 token 数
+ * @returns {Promise<string>} 生成的文本
+ */
+async function llmGenerate(profileId, prompt, maxTokens = 200) {
+    if (!profileId) {
+        // 兜底：无绑定 → 用当前选中的连接（generateQuietPrompt）
+        return await context.generateQuietPrompt({ quietPrompt: prompt });
+    }
+
+    const service = context?.ConnectionManagerRequestService;
+    if (!service) {
+        console.warn(`[${MODULE_NAME}] ConnectionManagerRequestService 不可用，退回当前连接`);
+        return await context.generateQuietPrompt({ quietPrompt: prompt });
+    }
+
+    try {
+        // sendRequest 返回 ExtractedData（{content, reasoning}），extractData=true 时 content 即正文
+        const result = await service.sendRequest(
+            profileId,
+            prompt,
+            maxTokens,
+            { stream: false, extractData: true, includePreset: true, includeInstruct: true },
+        );
+        // 兼容多种返回形态：ExtractedData.content / 字符串 / {text} / message.content 等
+        if (typeof result === 'string') return result;
+        if (result && typeof result === 'object') {
+            if (typeof result.content === 'string') return result.content;
+            if (typeof result.text === 'string') return result.text;
+            if (typeof result.data === 'string') return result.data;
+            if (result.data?.content) return result.data.content;
+            if (result.message?.content) return result.message.content;
+            if (Array.isArray(result.message?.content)) {
+                return result.message.content.map(c => c?.text || '').join('');
+            }
+        }
+        return String(result ?? '');
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 按 profile 生成失败（profileId=${profileId}）`, e);
+        return '';
+    }
+}
+
 // ============ Prompt 注入器（M3-4 + M3-20 两段式）============
 
 /** 当前缓存的摘要与世界书文本 */
@@ -451,6 +551,107 @@ async function pickupDelivery(deliveryId) {
     refreshInventoryTab();
 }
 
+// ============ M5 补完：连接绑定 tab ============
+
+/** 读取 ST 当前所有 profile（id + name），按名称排序 */
+function getStProfiles() {
+    const profiles = context?.extensionSettings?.connectionManager?.profiles || [];
+    return [...profiles].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+/** 用途标签（与 USE_TYPES 对齐，中文展示） */
+const USE_LABELS = {
+    main_event: '主事件叙事（强模型）',
+    intent: '意图判定（轻模型）',
+    summary: '摘要生成',
+};
+
+/** 刷新连接 tab：读取 ST profile + 后端 bindings，渲染两个下拉组 */
+async function refreshConnectionsTab() {
+    try {
+        const profiles = getStProfiles();
+        const bindings = await refreshBindings();
+
+        // 无 profile 时提示
+        if (profiles.length === 0) {
+            $('#us-conn-byuse').html(`<div class="us-empty">未检测到连接配置（profile）。请先在 ST 顶部「连接管理器」创建。</div>`);
+            $('#us-conn-byrole').empty();
+            $('#us-conn-hint').text('').hide();
+            return;
+        }
+
+        // 用途级绑定
+        const byUse = bindings.byUse || {};
+        const $use = $('#us-conn-byuse');
+        $use.empty();
+        for (const [useType, label] of Object.entries(USE_LABELS)) {
+            $use.append(renderBindingRow('byUse', useType, label, byUse[useType] || '', profiles));
+        }
+
+        // 角色级绑定（玩家 self + 常驻 NPC）
+        const byRole = bindings.byRole || {};
+        const $role = $('#us-conn-byrole');
+        $role.empty();
+        const roles = ['self', ...(await listBoundRoles())];
+        for (const role of roles) {
+            $role.append(renderBindingRow('byRole', role, role === 'self' ? '玩家（self）' : `角色 ${role}`, byRole[role] || '', profiles));
+        }
+
+        $('#us-conn-hint').text('角色级绑定优先于用途级；选「跟随当前连接」则不指定模型。').show();
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 刷新连接 tab 失败`, e);
+    }
+}
+
+/** 从后端 state 读取常驻角色列表（residents + activeEncounter 等） */
+async function listBoundRoles() {
+    try {
+        const result = await api('GET', '/state');
+        if (!result.ok) return [];
+        const s = result.data || {};
+        const roles = new Set();
+        (s.residents || []).forEach(r => { if (r?.id || r?.name) roles.add(r.id || r.name); });
+        if (s.activeEncounter?.id || s.activeEncounter?.name) roles.add(s.activeEncounter.id || s.activeEncounter.name);
+        return [...roles];
+    } catch {
+        return [];
+    }
+}
+
+/** 渲染单个绑定行（下拉选择 profile） */
+function renderBindingRow(dim, key, label, currentProfileId, profiles) {
+    const opts = [`<option value="">跟随当前连接</option>`];
+    for (const p of profiles) {
+        const sel = p.id === currentProfileId ? 'selected' : '';
+        opts.push(`<option value="${p.id}" ${sel}>${p.name}</option>`);
+    }
+    return `
+        <div class="us-field-row us-binding-row">
+            <label title="${dim}:${key}">${label}</label>
+            <select class="us-input us-binding-select" data-dim="${dim}" data-key="${key}">${opts.join('')}</select>
+        </div>
+    `;
+}
+
+/** 绑定下拉变更 → 写回后端 */
+async function onBindingChange($select) {
+    const dim = $select.data('dim');
+    const key = $select.data('key');
+    const profileId = $select.val() || null;
+    try {
+        const result = await api('POST', '/bindings/set', { dim, key, profileId });
+        if (result.ok) {
+            toastr?.success(`已${profileId ? '绑定' : '解除绑定'}：${key}`);
+            await refreshBindings();
+        } else {
+            toastr?.warning(`绑定失败：${result.error?.message || '未知错误'}`);
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 绑定写回失败`, e);
+        toastr?.warning('绑定失败');
+    }
+}
+
 // ============ M6 配置 tab ============
 
 async function refreshSettingsTab() {
@@ -631,6 +832,7 @@ function buildPanel() {
             <div class="us-tab" data-tab="audit">裁决</div>
             <div class="us-tab" data-tab="settings">配置</div>
             <div class="us-tab" data-tab="editor">规则</div>
+            <div class="us-tab" data-tab="connections">连接</div>
         </div>
         <div class="us-tab-content">
             <div class="us-pane" data-pane="time">
@@ -698,6 +900,13 @@ function buildPanel() {
                 <textarea id="us-editor-json" class="us-input" style="width:100%;height:80px;margin-top:6px;display:none;" placeholder="粘贴 JSON 导入"></textarea>
                 <button class="us-btn" id="us-btn-editor-apply-import" style="display:none;width:100%;margin-top:4px;">确认导入</button>
             </div>
+            <div class="us-pane" data-pane="connections" style="display:none;">
+                <div class="us-section-title">用途 → 模型</div>
+                <div id="us-conn-byuse" class="us-list"></div>
+                <div class="us-section-title">角色 → 模型（覆盖用途级）</div>
+                <div id="us-conn-byrole" class="us-list"></div>
+                <div id="us-conn-hint" class="us-empty"></div>
+            </div>
         </div>
     </div>
     `);
@@ -732,11 +941,17 @@ function buildPanel() {
         if (tab === 'affinity') refreshAffinityTab();
         if (tab === 'settings') refreshSettingsTab();
         if (tab === 'editor') refreshEditorTab();
+        if (tab === 'connections') refreshConnectionsTab();
     });
 
     $('#us-btn-pause').on('click', pause);
     $('#us-btn-resume').on('click', resume);
     $('#us-rate-select').on('change', function () { setRate(Number($(this).val())); });
+
+    // 连接绑定下拉（事件委托）
+    $panel.on('change', '.us-binding-select', function () {
+        onBindingChange($(this));
+    });
 
     // 角色池按钮（事件委托）
     $panel.on('click', '.us-btn-trigger', function () {
@@ -944,7 +1159,8 @@ function registerCommands() {
 
 /**
  * 消费事件队列里的 npc_speak 事件：
- * 对判定为 talk 的 NPC，用 generateQuietPrompt 生成发言，
+ * 对判定为 talk 的 NPC，按「角色级/用途级绑定」解析 profile 后，用
+ * ConnectionManagerRequestService 生成发言（不依赖当前连接状态），
  * 再以系统消息形式发出（不污染主对话上下文）。
  */
 let speakingInProgress = false;
@@ -960,11 +1176,13 @@ async function processNpcSpeakEvents() {
 
         for (const evt of speakEvents) {
             const role = evt.payload?.role || 'npc';
-            // 静默调用 LLM 生成发言（不污染聊天记录）
+            // 按角色解析该 NPC 应使用的 profile（角色级绑定优先，否则走当前连接）
+            const profileId = await resolveProfile(role, USE_TYPES.INTENT);
+            // 用解析出的 profile 生成发言（不污染聊天记录，且不依赖当前连接状态）
             let speech = '';
             try {
                 const prompt = `你是群聊中的角色「${role}」，请以第一人称主动说一句话（不要带动作描写前缀，直接说内容，不超过40字）。`;
-                speech = await context.generateQuietPrompt({ quietPrompt: prompt, quietName: role });
+                speech = await llmGenerate(profileId, prompt, 80);
             } catch (e) {
                 console.error(`[${MODULE_NAME}] NPC 发言生成失败`, e);
             }
