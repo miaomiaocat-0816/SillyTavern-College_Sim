@@ -14,7 +14,7 @@
     {
       "uid": "lore_study_stamina",
       "constant": false,
-      "content": "认真学习会消耗一定体力。长时间学习需要适当休息。\n\n<!--us\n{ \"type\": \"constraint\", \"target\": \"self.stamina\", \"max\": 20 }\nus-->\n\n劳逸结合才能保持学习效率。"
+      "content": "认真学习会消耗一定体力。长时间学习需要适当休息，劳逸结合才能保持学习效率。"
     }
   ]
 }
