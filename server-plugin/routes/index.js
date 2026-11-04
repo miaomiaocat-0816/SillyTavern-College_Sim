@@ -6,7 +6,7 @@
  */
 
 import { getState, mutate } from '../lib/bus.js';
-import { start, tick, formatRpTime } from '../lib/time-engine.js';
+import { start, tick, advance, formatRpTime } from '../lib/time-engine.js';
 import { getAllTemplates } from '../lib/items.js';
 import { aggregateInventory } from '../lib/inventory.js';
 import * as actions from '../lib/actions.js';
@@ -99,7 +99,15 @@ export function registerRoutes(router) {
             const s = await mutate(chatId, (state) => { state.time.paused = false; });
             return ok(res, { time: s.time });
         }
-        return fail(res, 400, 'INVALID_ACTION', 'action 必须是 setRate/pause/resume');
+        if (action === 'advance') {
+            const minutes = Number(value);
+            if (!Number.isFinite(minutes) || minutes <= 0) {
+                return fail(res, 400, 'INVALID_MINUTES', '推进分钟数必须是正数');
+            }
+            const t = await advance(chatId, minutes);
+            return ok(res, { time: t, timeLabel: formatRpTime(t.epochMinute).label });
+        }
+        return fail(res, 400, 'INVALID_ACTION', 'action 必须是 setRate/pause/resume/advance');
     }));
 
     router.post('/tick', wrap(async (req, res) => {

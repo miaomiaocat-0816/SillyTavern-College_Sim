@@ -16,7 +16,7 @@
  */
 
 import { dragElement } from '../../../RossAscends-mods.js';
-import { extension_prompt_types, extension_prompt_roles, setExtensionPrompt } from '../../../../script.js';
+import { extension_prompt_types, extension_prompt_roles, setExtensionPrompt, system_message_types } from '../../../../script.js';
 import { SlashCommandParser } from '../../../../scripts/slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../../scripts/slash-commands/SlashCommand.js';
 import { SlashCommandArgument } from '../../../../scripts/slash-commands/SlashCommandArgument.js';
@@ -790,7 +790,7 @@ function registerCommands() {
             if (!result.ok) return `查询失败：${result.error?.message || '未知错误'}`;
             const summary = result.data.summary;
             // 以系统消息样式输出
-            getContext().sendSystemMessage('system', summary);
+            getContext().sendSystemMessage(system_message_types.GENERIC, summary);
             return summary;
         },
     }));
@@ -868,12 +868,10 @@ function registerCommands() {
         callback: async (namedArgs, unnamedArgs) => {
             const minutes = Number(Array.isArray(unnamedArgs) ? unnamedArgs[0] : unnamedArgs);
             if (!Number.isFinite(minutes) || minutes <= 0) return '用法：/us-advance <分钟数>（正整数）';
-            // 通过临时设倍率 + tick 实现精确推进
-            const result = await api('POST', '/time', { action: 'setRate', value: minutes });
+            // 后端 advance 动作：精确推进且不改变倍率
+            const result = await api('POST', '/time', { action: 'advance', value: minutes });
             if (!result.ok) return `推进失败：${result.error?.message || '未知错误'}`;
-            const tickRes = await api('POST', '/tick', { chatId: chatId() });
-            if (!tickRes.ok) return `推进失败：${tickRes.error?.message || '未知错误'}`;
-            return `时间已推进到 ${tickRes.data.timeLabel}`;
+            return `时间已推进到 ${result.data.timeLabel}`;
         },
     }));
 
@@ -891,7 +889,7 @@ function registerCommands() {
             if (!Number.isFinite(days) || days <= 0) return '用法：/us-skip <天数>，例如 /us-skip 2d 或 /us-skip 0.5';
             const result = await api('POST', '/skip', { chatId: chatId(), days });
             if (!result.ok) return `快进失败：${result.error?.message || '未知错误'}`;
-            getContext().sendSystemMessage('system', result.data.summary);
+            getContext().sendSystemMessage(system_message_types.GENERIC, result.data.summary);
             return result.data.summary;
         },
     }));
@@ -953,7 +951,7 @@ async function processNpcSpeakEvents() {
 
             // 发出系统消息（NPC 发言）
             if (speech && typeof speech === 'string' && speech.trim()) {
-                context.sendSystemMessage('user', `${role}：${speech.trim()}`);
+                context.sendSystemMessage(system_message_types.NARRATOR, `${role}：${speech.trim()}`);
                 console.log(`[${MODULE_NAME}] NPC「${role}」主动发言：${speech.trim()}`);
             }
 

@@ -64,6 +64,24 @@ export async function tick(chatId) {
     });
 }
 
+/**
+ * 手动推进 RP 时间（不依赖倍率，推进后倍率不变）。
+ * 结算逻辑与 tick 一致：快递到站、课程状态、属性衰减。
+ * @param {string} chatId
+ * @param {number} minutes 推进的 RP 分钟数
+ */
+export async function advance(chatId, minutes) {
+    return mutate(chatId, (state) => {
+        const before = state.time.epochMinute;
+        state.time.epochMinute += Math.max(0, minutes || 0);
+        const elapsed = state.time.epochMinute - before;
+        settleArrivals(state);
+        updateClassState(state);
+        applyDecay(state, elapsed);
+        return state.time;
+    });
+}
+
 /** 停止某 chat 的时间引擎 */
 export function stop(chatId) {
     const timer = timers.get(chatId);
