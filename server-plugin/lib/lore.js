@@ -24,9 +24,73 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LORE_PATH = path.join(__dirname, '..', 'data', 'lore.json');
+const ACTIONS_PATH = path.join(__dirname, '..', 'data', 'actions.json');
 
 const BLOCK_OPEN = '<!--us';
 const BLOCK_CLOSE = 'us-->';
+
+/** 动作别名缓存：Map<alias(小写), 标准动作id> */
+let actionAliasMap = null;
+
+/**
+ * 加载动作别名映射（data/actions.json）。
+ * 把「上课/自习/图书馆自习/学习」等表述统一归一化到标准动作标签（study/go_out/order）。
+ * 铁律 R7：动作语义由 data/actions.json 声明式定义，加词只改 JSON。
+ */
+export function loadActionAliases() {
+    if (actionAliasMap) return actionAliasMap;
+
+    actionAliasMap = new Map();
+    try {
+        const raw = JSON.parse(fs.readFileSync(ACTIONS_PATH, 'utf8'));
+        for (const a of raw.actions || []) {
+            if (!a.id) continue;
+            // 标准 id 本身也作为匹配词（大小写不敏感）
+            actionAliasMap.set(String(a.id).toLowerCase(), a.id);
+            for (const alias of a.aliases || []) {
+                actionAliasMap.set(String(alias).toLowerCase(), a.id);
+            }
+        }
+    } catch (e) {
+        console.warn(`[lore] 动作别名文件加载失败（降级为精确匹配）：${e.message}`);
+        actionAliasMap = new Map();
+    }
+    return actionAliasMap;
+}
+
+/** 使动作别名缓存失效（规则编辑器写回后调用） */
+export function invalidateActionAliases() {
+    actionAliasMap = null;
+}
+
+/**
+ * 动作归一化：把任意动作词（可能是中文、英文、带场景前缀）归一化到标准动作标签。
+ * 例：'去图书馆自习' → 'study'，'study' → 'study'，'上课' → 'study'。
+ * 匹配策略：优先「完整别名」精确命中；其次「子串包含」命中（如「去图书馆自习」包含别名「图书馆」「自习」）。
+ * 未命中则原样返回（降级为精确匹配行为，不误伤未知动作）。
+ *
+ * @param {string} action 原始动作词
+ * @returns {string} 归一化后的标准动作 id（或原词）
+ */
+export function normalizeAction(action) {
+    if (typeof action !== 'string' || !action) return action;
+    const map = loadActionAliases();
+    const key = action.toLowerCase();
+
+    // 1. 完整精确命中
+    if (map.has(key)) return map.get(key);
+
+    // 2. 子串包含命中（处理「去图书馆自习」这类组合词）
+    //    按别名长度降序，优先匹配更长的别名，避免「图书馆」抢在「图书馆自习」前面
+    const aliases = [...map.keys()].sort((a, b) => b.length - a.length);
+    for (const alias of aliases) {
+        if (key.includes(alias)) return map.get(alias);
+    }
+
+    // 3. 未命中，原样返回
+    return action;
+}
+
 
 /**
  * 从文本中提取所有 <!--us ... us--> 约束块。
@@ -156,7 +220,10 @@ export function applyLoreConstraints(state, actionType, target) {
     for (const c of constraints) {
         // block 类型：动作禁止
         if (c.type === 'block') {
-            const actionMatch = c.action ? c.action === actionType : true;
+            // 动作归一化：把「上课/自习/图书馆自习」等统一映射到标准动作标签（如 study），
+            // 实现模糊匹配（constraint 块里写 study，玩家说「去自习」也能被拦截）
+            const normalizedAction = normalizeAction(actionType);
+            const actionMatch = c.action ? c.action === normalizedAction : true;
             if (!actionMatch) continue;
 
             // during 时间段判断
