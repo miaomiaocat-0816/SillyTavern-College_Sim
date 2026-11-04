@@ -15,11 +15,11 @@
  *  - SlashCommandParser.addCommandObject(SlashCommand.fromProps({...}))
  */
 
-import { dragElement } from '../../../RossAscends-mods.js';
-import { extension_prompt_types, extension_prompt_roles, setExtensionPrompt, system_message_types } from '../../../../script.js';
-import { SlashCommandParser } from '../../../../scripts/slash-commands/SlashCommandParser.js';
-import { SlashCommand } from '../../../../scripts/slash-commands/SlashCommand.js';
-import { SlashCommandArgument } from '../../../../scripts/slash-commands/SlashCommandArgument.js';
+import { ensureHost, describeHost } from './host.js';
+
+// 宿主符号在 init() 前通过 ensureHost() 探测得到，存到 HOST（见 init）。
+// 不再用脆弱的硬编码多层相对路径静态 import（那些路径曾因层数写错导致整个扩展挂掉）。
+let HOST = null;
 
 const MODULE_NAME = 'university-sim';
 const PANEL_ID = 'university-sim-panel';
@@ -84,14 +84,15 @@ async function refreshInjection() {
 /** 调用 setExtensionPrompt 应用注入 */
 function applyInjection() {
     const text = buildInjectionText();
-    if (!text) return;
+    if (!text || !HOST?.setExtensionPrompt) return;
     // position=IN_PROMPT(0)，depth=0，scan=true（让注入块可被 ST 检测），role=SYSTEM
-    setExtensionPrompt(PROMPT_KEY, text, extension_prompt_types.IN_PROMPT, 0, true, extension_prompt_roles.SYSTEM);
+    HOST.setExtensionPrompt(PROMPT_KEY, text, HOST.extension_prompt_types.IN_PROMPT, 0, true, HOST.extension_prompt_roles.SYSTEM);
 }
 
 /** 关闭注入（关闭扩展时移除） */
 function clearInjection() {
-    setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.NONE, 0, false, extension_prompt_roles.SYSTEM);
+    if (!HOST?.setExtensionPrompt) return;
+    HOST.setExtensionPrompt(PROMPT_KEY, '', HOST.extension_prompt_types.NONE, 0, false, HOST.extension_prompt_roles.SYSTEM);
 }
 
 // ============ 数值偏差检测（M3-5~6）============
@@ -702,7 +703,20 @@ function buildPanel() {
     `);
 
     $('body').append($panel);
-    dragElement($panel);
+    // 样式自愈：即使 style.css 未加载，面板关键几何（定位/层级/最小尺寸）也内联钉死，
+    // 避免出现「透明容器套透明盒子」或「一条缝」这类看不见面板的故障（借鉴 ILB 的兜底思路）。
+    const panelEl = $panel[0];
+    if (panelEl) {
+        panelEl.style.position = 'fixed';
+        panelEl.style.right = '10px';
+        panelEl.style.top = '60px';
+        panelEl.style.width = '280px';
+        panelEl.style.zIndex = '3000';
+        panelEl.style.minHeight = '120px';
+        panelEl.style.background = 'rgba(20, 20, 30, 0.92)';
+        panelEl.style.color = '#ddd';
+    }
+    if (HOST?.dragElement) HOST.dragElement($panel);
 
     $('.us-tab').on('click', function () {
         const tab = $(this).data('tab');
@@ -779,6 +793,12 @@ function buildPanel() {
 
 function registerCommands() {
     const chatId = () => (getContext().chatId || 'default');
+    // 从宿主探测结果解构符号（host.js 多路径探测 + 全局兜底）
+    const { SlashCommandParser, SlashCommand, SlashCommandArgument, system_message_types } = HOST;
+    if (!SlashCommandParser || !SlashCommand || !SlashCommandArgument) {
+        console.error(`[${MODULE_NAME}] 宿主斜杠命令模块探测失败，命令未注册（describeHost: ${describeHost()}）`);
+        return;
+    }
 
     // /us-state
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
@@ -951,7 +971,7 @@ async function processNpcSpeakEvents() {
 
             // 发出系统消息（NPC 发言）
             if (speech && typeof speech === 'string' && speech.trim()) {
-                context.sendSystemMessage(system_message_types.NARRATOR, `${role}：${speech.trim()}`);
+                context.sendSystemMessage(HOST.system_message_types.NARRATOR, `${role}：${speech.trim()}`);
                 console.log(`[${MODULE_NAME}] NPC「${role}」主动发言：${speech.trim()}`);
             }
 
@@ -968,10 +988,25 @@ async function processNpcSpeakEvents() {
 // ============ 初始化 ============
 
 async function init() {
+    // 先探测宿主符号（多路径 + 全局兜底），失败降级而非崩溃
+    HOST = await ensureHost();
+    console.log(`[${MODULE_NAME}] 宿主探测完成（${describeHost()}）`);
+
     context = getContext();
 
-    buildPanel();
-    registerCommands();
+    // 失败隔离：每个独立步骤各自 try/catch，任何一步炸了只影响那一块，
+    // 面板照常可用、命令照常注册、注入照常跑（借鉴 ILB「管线每步独立 try/catch」）。
+    try {
+        buildPanel();
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 面板构建失败（其余功能不受影响）`, e);
+    }
+
+    try {
+        registerCommands();
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 斜杠命令注册失败（其余功能不受影响）`, e);
+    }
 
     // 启动时间引擎
     try { await api('POST', '/time/start', {}); } catch (e) {
@@ -979,8 +1014,12 @@ async function init() {
     }
 
     // 初始刷新 + 注入
-    await refreshInjection();
-    refreshTimeTab();
+    try { await refreshInjection(); } catch (e) {
+        console.error(`[${MODULE_NAME}] 初始注入刷新失败`, e);
+    }
+    try { refreshTimeTab(); } catch (e) {
+        console.error(`[${MODULE_NAME}] 初始时间刷新失败`, e);
+    }
 
     // 每秒轮询时间
     pollTimer = setInterval(() => { refreshTimeTab(); }, 1000);
@@ -992,20 +1031,28 @@ async function init() {
     setInterval(processNpcSpeakEvents, 10000);
 
     // 监听生成前事件：注入 prompt（M3-4）
-    context.eventSource.on(context.event_types.GENERATION_STARTED, () => {
-        applyInjection();
-    });
+    try {
+        context.eventSource.on(context.event_types.GENERATION_STARTED, () => {
+            applyInjection();
+        });
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 生成前注入事件订阅失败`, e);
+    }
 
     // 监听消息接收事件：数值偏差检测（M3-6）
-    context.eventSource.on(context.event_types.MESSAGE_RECEIVED, (messageId) => {
-        const chat = context.chat;
-        if (!chat || messageId === undefined) return;
-        const msg = chat[messageId];
-        if (msg && msg.mes) {
-            const $el = $(`.mes[mesid="${messageId}"]`);
-            scanNumericLeak(msg.mes, $el[0]);
-        }
-    });
+    try {
+        context.eventSource.on(context.event_types.MESSAGE_RECEIVED, (messageId) => {
+            const chat = context.chat;
+            if (!chat || messageId === undefined) return;
+            const msg = chat[messageId];
+            if (msg && msg.mes) {
+                const $el = $(`.mes[mesid="${messageId}"]`);
+                scanNumericLeak(msg.mes, $el[0]);
+            }
+        });
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 数值偏差检测事件订阅失败`, e);
+    }
 
     console.log(`[${MODULE_NAME}] UI 扩展 init() 完成，面板 + prompt 注入 + 命令已就绪`);
 }

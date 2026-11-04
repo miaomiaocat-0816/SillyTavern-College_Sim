@@ -3,6 +3,9 @@ server-plugin/data/default.json
 server-plugin/data/*.json.tmp
 *.tmp
 
+# 存档迁移前备份（bus.js 自动生成）
+server-plugin/data/_backup/
+
 # Node
 node_modules/
 npm-debug.log*

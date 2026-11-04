@@ -17,6 +17,19 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 
+/**
+ * 存档格式版本（借鉴 ILB 的 DATA_VERSION 思路）。
+ * 只有当存档结构发生「破坏性/需显式转换」的变化时才 +1；
+ * 单纯新增可选字段用 migrate() 的补齐逻辑即可，不升版本号。
+ */
+export const STATE_VERSION = 1;
+
+/** 迁移前备份目录：data/_backup/ */
+const BACKUP_DIR = path.join(DATA_DIR, '_backup');
+
+/** 每个 chat 最多保留的备份份数（超出删最旧的） */
+const BACKUP_LIMIT = 5;
+
 /** @type {Map<string, object>} chatId -> state */
 const states = new Map();
 
@@ -78,7 +91,11 @@ export async function getState(chatId) {
     if (fs.existsSync(fp)) {
         try {
             state = JSON.parse(fs.readFileSync(fp, 'utf8'));
-            state = migrate(state); // 旧存档补齐新字段
+            state = migrateWithBackup(chatId, fp, state); // 旧存档先备份再补齐
+            // 迁移/补齐后立即落盘，保证版本号与补齐字段持久化（避免下次重启重复迁移）
+            if (state.version === STATE_VERSION && !states.has(chatId)) {
+                await persist(chatId, state);
+            }
         } catch (e) {
             console.error(`[university-sim] 状态文件损坏，重建默认：${fp}`, e);
             state = createDefaultState();
@@ -93,6 +110,9 @@ export async function getState(chatId) {
 /**
  * 状态迁移/补齐：旧存档缺少新字段时，用默认值补齐（不报错）。
  * M2-19 验收：旧存档（无 hunger 等）加载后自动补齐 default。
+ *
+ * 注意：这是「字段补齐」迁移（非破坏性），始终安全。真正的破坏性结构变更
+ * 应升 STATE_VERSION 并在 migrateWithBackup 里做显式转换。
  */
 function migrate(state) {
     const defaults = createDefaultState();
@@ -113,6 +133,75 @@ function migrate(state) {
     if (!state.bindings) state.bindings = { byUse: {}, byRole: {} };
     if (!state.residents) state.residents = [];
     return state;
+}
+
+/**
+ * 版本化迁移 + 迁移前备份（借鉴 ILB 的「先备份 → 再迁移 → 失败不动」顺序）。
+ *
+ * 顺序严格：
+ *  1. 读旧版本号
+ *  2. 若 version < STATE_VERSION：先把原始存档整份备份到 _backup 目录
+ *  3. 迁移（字段补齐 + 可能的显式转换）
+ *  4. 迁移成功 → 更新 version 并立即落盘
+ *  5. 迁移/备份失败 → 返回原始 state（不覆盖、不写坏），只打日志
+ *
+ * 幂等：版本号已是最新时，直接走字段补齐，不重复备份。
+ *
+ * @param {string} chatId
+ * @param {string} fp 存档文件路径
+ * @param {object} state 已解析的存档对象
+ * @returns {object} 迁移后的 state
+ */
+function migrateWithBackup(chatId, fp, state) {
+    // 旧存档可能完全没有 version 字段（视为 0，比任何版本都旧）
+    const from = Number(state.version) || 0;
+
+    // 版本已最新：只做字段补齐（安全幂等），不备份
+    if (from >= STATE_VERSION) {
+        return migrate(state);
+    }
+
+    // 旧版本：先备份，再迁移
+    try {
+        backupState(chatId, fp, state, from);
+    } catch (e) {
+        console.error(`[university-sim] 迁移前备份失败，已放弃迁移（按旧格式读，不覆盖）：${e?.message ?? e}`);
+        // 备份失败就退回原样（宁可这轮按老格式读，也不能改坏用户数据）
+        return migrate(state);
+    }
+
+    // 迁移（当前只有字段补齐；未来破坏性变更在此按 from 逐级转换）
+    const migrated = migrate(state);
+    migrated.version = STATE_VERSION;
+    migrated.updatedAt = Date.now();
+    return migrated;
+}
+
+/**
+ * 备份一份存档到 _backup 目录（整份 JSON，含原始版本号）。
+ * 超出 BACKUP_LIMIT 时删最旧的。
+ */
+function backupState(chatId, fp, state, fromVersion) {
+    const safe = String(chatId).replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(BACKUP_DIR, `${safe}.v${fromVersion}.${ts}.json`);
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    fs.writeFileSync(backupPath, JSON.stringify(state, null, 2), 'utf8');
+
+    // 清理超量备份（按文件名排序，删最旧的）
+    try {
+        const prefix = `${safe}.`;
+        const backups = fs.readdirSync(BACKUP_DIR)
+            .filter((f) => f.startsWith(prefix) && f.endsWith('.json'))
+            .sort();
+        while (backups.length > BACKUP_LIMIT) {
+            const oldest = backups.shift();
+            fs.unlinkSync(path.join(BACKUP_DIR, oldest));
+        }
+    } catch (e) {
+        // 清理失败不影响主流程，仅告警
+        console.warn(`[university-sim] 备份清理失败：${e?.message ?? e}`);
+    }
 }
 
 /**
