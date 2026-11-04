@@ -18,6 +18,7 @@
  */
 
 import { getAttributeDef, getByPath, getRoleValues, coerceValue, parsePath } from './attributes.js';
+import { applyLoreConstraints } from './lore.js';
 
 /** reserved 清单：LLM 永不触碰的字段（D12） */
 export const RESERVED_KEYS = ['money', 'pregnant', 'inventory', 'inClass'];
@@ -136,6 +137,14 @@ function adjudicateOne(state, eff, ctx) {
     let finalDelta = delta;
     const clampRecords = [];
 
+    // L0 世界书约束（v4 两段式第一段）：constraint 类型限制单次改动上限
+    const loreConstraint = applyLoreConstraints(state, null, eff.target);
+    if (loreConstraint.maxDelta !== undefined && Math.abs(finalDelta) > loreConstraint.maxDelta) {
+        const sign = Math.sign(finalDelta);
+        finalDelta = sign * loreConstraint.maxDelta;
+        clampRecords.push({ type: 'LORE_CLAMPED', from: delta, to: finalDelta, reason: `世界书约束上限 ${loreConstraint.maxDelta}` });
+    }
+
     // 规则 5：单次上限（裁剪）
     if (def.deltaLimits?.single !== undefined && Math.abs(finalDelta) > def.deltaLimits.single) {
         const sign = Math.sign(finalDelta);
@@ -180,6 +189,11 @@ function adjudicateOne(state, eff, ctx) {
 
     // 落地
     roleValues[parsed.attrKey] = resultValue;
+
+    // 好感变化视为互动，更新 lastInteraction（供「无互动衰减」判断）
+    if (parsed.attrKey === 'affinity') {
+        roleValues.lastInteraction = state.time?.epochMinute ?? 0;
+    }
 
     // 累计当日 delta
     if (!state._dailyDeltas) state._dailyDeltas = {};

@@ -46,6 +46,9 @@ export function use(state, { instanceId }) {
     if (!inst) {
         return { ok: false, error: { code: 'ITEM_NOT_IN_INVENTORY', message: '物品不在背包中' } };
     }
+    if (inst.state === 'borrowed') {
+        return { ok: false, error: { code: 'ITEM_BORROWED', message: '物品已借出，暂不可用' } };
+    }
 
     const tpl = getTemplate(inst.templateId);
     if (tpl.type === 'consumable') {

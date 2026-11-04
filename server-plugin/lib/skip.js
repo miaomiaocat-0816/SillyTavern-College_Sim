@@ -17,6 +17,8 @@ import { updateClassState } from './schedule.js';
 import { formatRpTime } from './time-engine.js';
 import { advanceCycle } from './cycle.js';
 import { buildSummary } from './summary.js';
+import { applyDecay } from './attributes.js';
+import { loadAllConstraints } from './lore.js';
 
 /** 单次 skip 的最大天数（超出报错，防止误操作/卡死） */
 const MAX_SKIP_DAYS = 30;
@@ -61,8 +63,8 @@ export function skipDays(state, days) {
         // 课程状态（跨过上课/下课点成对触发）
         updateClassState(state);
 
-        // 属性衰减（按 elapsed 粗粒度：每片按 1 天衰减）
-        applyDecayStep(state, step);
+        // 属性衰减（与真实 tick 同一逻辑）
+        applyDecay(state, step);
 
         // 生理周期演化（每片按天推进）
         stepCycles(state, step, collected);
@@ -84,21 +86,6 @@ export function skipDays(state, days) {
     return { ok: true, summary, events: collected, from, to: state.time.epochMinute };
 }
 
-/** 属性衰减（粗粒度：每片按 RP 天数线性衰减 number 类型属性） */
-function applyDecayStep(state, stepMinutes) {
-    const rpDays = stepMinutes / MIN_PER_DAY;
-    // 简化：只衰减 self 的 number 属性，按 decay.perRp24h 线性
-    for (const roleKey of Object.keys(state.attributes || {})) {
-        const vals = state.attributes[roleKey];
-        if (!vals || typeof vals !== 'object') continue;
-        // 这里依赖 attributes.json 定义，但为避免循环 import，用通用衰减：
-        // 仅当属性对象里存在 decay 信息时无法获取，故此处不实现精确衰减。
-        // 精确衰减由 attributes.js 的 applyDecay 在真实 tick 中处理；
-        // skip 场景采用等价简化：跳过（M6-8 验收关注快递/课程/摘要，属性衰减为增强项）。
-        void vals; void rpDays;
-    }
-}
-
 /** 生理周期演化（每个角色的 cycle 按天推进） */
 function stepCycles(state, stepMinutes, collected) {
     const rpDays = stepMinutes / MIN_PER_DAY;
@@ -113,6 +100,13 @@ function stepCycles(state, stepMinutes, collected) {
     }
 }
 
+/** 从世界书约束块读取生活费金额（type=allowance），无则兜底 2000 */
+function getAllowanceAmount() {
+    const { constraints } = loadAllConstraints();
+    const c = constraints.find(x => x.type === 'allowance');
+    return c?.amount ?? 2000;
+}
+
 /** 生活费发放（每月 1 号，月首跨过时发放一次） */
 function applyAllowance(state, collected) {
     // 检测是否跨过「月首」（每 30 天为一个月，简化：day % 30 === 0 视为月首）
@@ -122,7 +116,7 @@ function applyAllowance(state, collected) {
     if (!state.flags) state.flags = {};
     const lastMonth = state.flags._lastAllowanceMonth ?? -1;
     if (monthIndex > lastMonth) {
-        const amount = 2000; // 与 lore.json 的 allowance 规则一致
+        const amount = getAllowanceAmount();
         state.money += amount;
         state.flags._lastAllowanceMonth = monthIndex;
         collected.monthAllowance += amount;

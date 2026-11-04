@@ -15,7 +15,7 @@
  *  - SlashCommandParser.addCommandObject(SlashCommand.fromProps({...}))
  */
 
-import { dragElement } from '../../../../RossAscends-mods.js';
+import { dragElement } from '../../../RossAscends-mods.js';
 import { extension_prompt_types, extension_prompt_roles, setExtensionPrompt } from '../../../../script.js';
 import { SlashCommandParser } from '../../../../scripts/slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../../scripts/slash-commands/SlashCommand.js';
@@ -37,6 +37,7 @@ const NUMERIC_PATTERN = /\d+\s*(?:元|块钱|块|分钟|小时|个|点|分)/g;
 /** 统一 API 请求 */
 async function api(method, path, body) {
     const headers = context.getRequestHeaders();
+    headers['x-chat-id'] = context.chatId || 'default';
     const opts = { method, headers };
     if (body !== undefined) {
         opts.body = JSON.stringify(body);
@@ -945,7 +946,7 @@ async function processNpcSpeakEvents() {
             let speech = '';
             try {
                 const prompt = `你是群聊中的角色「${role}」，请以第一人称主动说一句话（不要带动作描写前缀，直接说内容，不超过40字）。`;
-                speech = await context.generateQuietPrompt({ quietPrompt: prompt, forceName2: true });
+                speech = await context.generateQuietPrompt({ quietPrompt: prompt, quietName: role });
             } catch (e) {
                 console.error(`[${MODULE_NAME}] NPC 发言生成失败`, e);
             }

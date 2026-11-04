@@ -134,7 +134,9 @@ export async function mutate(chatId, mutator) {
 
     try {
         // 执行写入（mutator 内直接改 state，符合计划书「函数内加锁」语义）
-        const result = mutator(state);
+        // 注意：mutator 可能是 async（如 /events/consume 的 arbitrate），必须 await，
+        // 否则 result 是 Promise，且 persist 会在 mutator 真正改完 state 之前执行。
+        const result = await mutator(state);
         state.updatedAt = Date.now();
         // 落盘
         await persist(chatId, state);

@@ -205,23 +205,45 @@ export function getRoleValues(state, roleKey) {
 }
 
 /**
- * 属性自然衰减（由 tick 调用）。
+ * 属性自然衰减（由 tick / skip 调用）。
  * 按 decay 规则扣减 number 类型属性。
+ * @param {object} state 状态对象（在 mutate 内）
+ * @param {number} elapsedMinutes 本次经过的 RP 分钟数
  */
-export function applyDecay(state) {
+export function applyDecay(state, elapsedMinutes) {
+    const rpDays = (Number(elapsedMinutes) || 0) / 1440;
+    if (rpDays <= 0) return;
+    const now = state.time?.epochMinute ?? 0;
+
     for (const def of loadAttributes().values()) {
         if (def.type !== 'number' || !def.decay) continue;
-        // 计算经过的 RP 天数（tick 粒度，这里简化为按 tick 的 elapsed 计算）
-        // M2 简化：decay.perRp24h 按 24h = 1440 RP 分钟换算到本次 tick
-        const perRp24h = def.decay.perRp24h;
-        if (perRp24h === undefined) continue;
 
-        // 遍历所有持有该属性的角色
         for (const roleKey of Object.keys(state.attributes || {})) {
             const vals = state.attributes[roleKey];
+            if (!vals || typeof vals !== 'object') continue;
             if (vals[def.key] === undefined) continue;
-            // 简化：仅当有 elapsed 时才衰减（由 tick 传参）；M2 用粗粒度
-            // 这里不实现精确衰减，留待 tick 集成时按 elapsed 计算
+
+            const current = Number(vals[def.key]);
+            let delta = 0;
+
+            if (def.decay.perRp24h !== undefined) {
+                // 固定速率衰减（如健康/体力随时间自然下降）
+                delta = def.decay.perRp24h * rpDays;
+            } else if (def.decay.perRp24hNoInteraction !== undefined) {
+                // 仅当距上次互动超过 24 RP 小时才衰减（好感）
+                const last = Number(vals.lastInteraction || 0);
+                if (now - last > 1440) {
+                    delta = def.decay.perRp24hNoInteraction * rpDays;
+                }
+            }
+
+            if (!delta) continue;
+
+            let next = current + delta;
+            const floor = def.decay.floor ?? def.min;
+            if (floor !== undefined) next = Math.max(floor, next);
+            if (def.max !== undefined) next = Math.min(def.max, next);
+            vals[def.key] = Math.round(next * 10) / 10;
         }
     }
 }
