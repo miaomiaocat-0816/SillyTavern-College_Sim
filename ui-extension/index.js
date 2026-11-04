@@ -11,7 +11,7 @@
  *  - getContext().getRequestHeaders()  → 自动带 X-CSRF-Token
  *  - dragElement($el)                  → 可拖动，需 <id>header 子元素
  *  - setExtensionPrompt(key,value,position,depth,scan,role,filter)
- *  - eventSource.on(event_types.X, cb) → 事件监听
+ *  - eventSource.on(eventTypes.X, cb) → 事件监听
  *  - SlashCommandParser.addCommandObject(SlashCommand.fromProps({...}))
  */
 
@@ -1032,7 +1032,7 @@ async function init() {
 
     // 监听生成前事件：注入 prompt（M3-4）
     try {
-        context.eventSource.on(context.event_types.GENERATION_STARTED, () => {
+        context.eventSource.on(context.eventTypes.GENERATION_STARTED, () => {
             applyInjection();
         });
     } catch (e) {
@@ -1041,7 +1041,7 @@ async function init() {
 
     // 监听消息接收事件：数值偏差检测（M3-6）
     try {
-        context.eventSource.on(context.event_types.MESSAGE_RECEIVED, (messageId) => {
+        context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, (messageId) => {
             const chat = context.chat;
             if (!chat || messageId === undefined) return;
             const msg = chat[messageId];
