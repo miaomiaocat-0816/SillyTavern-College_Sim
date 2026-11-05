@@ -146,35 +146,80 @@ async function llmGenerate(profileId, prompt, maxTokens = 200) {
     }
 }
 
+// ============ 辅助模型上下文工具（多模型信息互通）============
+
+/**
+ * 取主对话最近 n 条消息，格式化成纯文本（供辅助模型理解上下文）。
+ * 过滤 system 消息，保留用户/角色发言，名字取 message.name（缺省用 name1/name2）。
+ * @param {number} n 最多取几条
+ * @returns {string} 形如「[玩家名]：xxx\n[角色名]：yyy」的文本
+ */
+function contextFromChat(n = 6) {
+    const chat = context?.chat;
+    if (!Array.isArray(chat) || chat.length === 0) return '';
+    const recent = chat.slice(-n);
+    const lines = [];
+    for (const msg of recent) {
+        if (!msg || msg.is_system) continue;
+        const who = msg.name || (msg.is_user ? (context.name1 || '玩家') : (context.name2 || '角色'));
+        const text = String(msg.mes ?? '').trim();
+        if (!text) continue;
+        lines.push(`[${who}]：${text}`);
+    }
+    return lines.join('\n');
+}
+
+/**
+ * 拼统一辅助 prompt：世界状态 + 最近对话 + 任务指令。
+ * @param {object} opts { stateText, recentText, instruction, role }
+ * @returns {string}
+ */
+function buildAuxPrompt({ stateText = '', recentText = '', instruction = '', role = '' }) {
+    const parts = [];
+    if (role) parts.push(`你是「${role}」。`);
+    if (stateText) parts.push(`【当前世界状态】\n${stateText}`);
+    if (recentText) parts.push(`【最近对话】\n${recentText}`);
+    if (instruction) parts.push(instruction);
+    return parts.join('\n\n');
+}
+
 // ============ Prompt 注入器（M3-4 + M3-20 两段式）============
 
 /** 当前缓存的摘要与世界书文本 */
 let cachedSummary = '';
 let cachedLoreText = '';
+let cachedNarrative = '';
 
 /**
  * 构建两段式注入块：
  * 【世界设定】（世界书约束剥离后的原文）
  * 【当前状态】（/summary 逐字一致）
+ * 【剧情记录】（/narrative LLM 总结的主事件脉络，信息互通）
  * 【叙事规则】（三条铁律）
  */
 function buildInjectionText() {
     const worldSection = cachedLoreText ? `【世界设定】\n${cachedLoreText}` : '';
     const stateSection = cachedSummary ? `【当前状态】\n${cachedSummary}` : '';
+    const narrativeSection = cachedNarrative ? `【剧情记录】\n${cachedNarrative}` : '';
     const rulesSection = `【叙事规则】\n1. 叙述中的数字仅为模糊表述，禁止写出具体金额、数量、时间。\n2. 数值以系统面板为准，叙事不得臆造与状态矛盾的数值。\n3. 若叙事与设定冲突，以世界设定为准。`;
 
-    return [worldSection, stateSection, rulesSection].filter(Boolean).join('\n\n');
+    return [worldSection, stateSection, narrativeSection, rulesSection].filter(Boolean).join('\n\n');
 }
 
-/** 刷新摘要与世界书缓存，并更新注入 */
+/** 刷新摘要、世界书与剧情记录缓存，并更新注入 */
 async function refreshInjection() {
     try {
-        const [sumRes, loreRes] = await Promise.all([
+        const [sumRes, loreRes, narRes] = await Promise.all([
             api('GET', '/summary'),
             api('GET', '/lore'),
+            api('GET', '/narrative?limit=8'),
         ]);
         if (sumRes.ok) cachedSummary = sumRes.data.summary;
         if (loreRes.ok) cachedLoreText = loreRes.data.text || '';
+        if (narRes.ok) {
+            const entries = narRes.data?.entries || [];
+            cachedNarrative = entries.map(e => `· ${e.summary}`).join('\n');
+        }
         applyInjection();
     } catch (e) {
         console.error(`[${MODULE_NAME}] 刷新注入失败`, e);
@@ -818,8 +863,8 @@ function buildPanel() {
     if ($(`#${PANEL_ID}`).length) return;
 
     const $panel = $(`
-    <div id="${PANEL_ID}" class="drawer-content us-panel">
-        <div id="${PANEL_ID}header" class="drawer-header" style="cursor: move;">
+    <div id="${PANEL_ID}" class="us-panel">
+        <div id="${PANEL_ID}header" class="us-panel-header" style="cursor: move;">
             <span class="us-panel-title">大学模拟</span>
         </div>
         <div class="us-tabs">
@@ -1178,10 +1223,15 @@ async function processNpcSpeakEvents() {
             const role = evt.payload?.role || 'npc';
             // 按角色解析该 NPC 应使用的 profile（角色级绑定优先，否则走当前连接）
             const profileId = await resolveProfile(role, USE_TYPES.INTENT);
-            // 用解析出的 profile 生成发言（不污染聊天记录，且不依赖当前连接状态）
+            // 用解析出的 profile 生成发言（带世界状态+最近对话，保证信息互通）
             let speech = '';
             try {
-                const prompt = `你是群聊中的角色「${role}」，请以第一人称主动说一句话（不要带动作描写前缀，直接说内容，不超过40字）。`;
+                const prompt = buildAuxPrompt({
+                    role,
+                    stateText: cachedSummary || '',
+                    recentText: contextFromChat(6),
+                    instruction: '请以第一人称主动说一句话（不要带动作描写前缀，直接说内容，不超过40字）。',
+                });
                 speech = await llmGenerate(profileId, prompt, 80);
             } catch (e) {
                 console.error(`[${MODULE_NAME}] NPC 发言生成失败`, e);
@@ -1200,6 +1250,108 @@ async function processNpcSpeakEvents() {
         console.error(`[${MODULE_NAME}] NPC 发言事件处理失败`, e);
     } finally {
         speakingInProgress = false;
+    }
+}
+
+// ============ 链路 A：主事件记录（轻量模型总结剧情）============
+
+let recordingInProgress = false;
+
+/**
+ * 每轮主对话回复后，用「主事件记录」绑定的模型（轻量 flash）总结剧情进展，
+ * 回写后端 narrative，供主对话下一轮注入（信息互通）。
+ */
+async function recordNarrative() {
+    if (recordingInProgress) return;
+    recordingInProgress = true;
+    try {
+        const profileId = await resolveProfile(null, USE_TYPES.MAIN_EVENT);
+        const stateText = cachedSummary || '';
+        const recentText = contextFromChat(8);
+        const instruction = '你是剧情记录员。请根据上述世界状态与最近对话，输出本回合发生的关键事件。' +
+            '严格只输出一行 JSON（不要 markdown 代码块、不要任何解释文字），格式：' +
+            '{"summary":"一句话概括本回合剧情","npcChanges":null,"flags":null}';
+        const prompt = buildAuxPrompt({ stateText, recentText, instruction });
+        const raw = await llmGenerate(profileId, prompt, 150);
+
+        // 解析 JSON（多层降级，避免把 JSON 字符串整段当成 summary）
+        let summary = '';
+        let npcChanges = null;
+        let flags = null;
+
+        const clean = (raw || '').trim();
+        // 1) 剥 markdown 代码块
+        let jsonStr = clean;
+        const fence = clean.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fence) jsonStr = fence[1].trim();
+
+        // 2) 尝试直接 JSON.parse
+        try {
+            const obj = JSON.parse(jsonStr);
+            summary = obj.summary || obj.text || '';
+            npcChanges = obj.npcChanges ?? null;
+            flags = obj.flags ?? null;
+        } catch {
+            // 3) 若含 { 开头，尝试提取 summary 字段值（处理不完整/尾随文本的 JSON）
+            const m = jsonStr.match(/"summary"\s*:\s*"([^"]*)"/);
+            if (m) {
+                summary = m[1];
+            } else {
+                // 4) 完全非 JSON：过滤掉花括号噪声，取纯文本前 120 字
+                summary = jsonStr.replace(/^[{\[]+|[}\]]+$/g, '').trim().slice(0, 120);
+            }
+        }
+
+        if (!summary) return;
+        const result = await api('POST', '/narrative/record', { summary, npcChanges, flags });
+        if (result.ok) {
+            console.log(`[${MODULE_NAME}] 主事件记录已写入：${summary.slice(0, 40)}`);
+            await refreshInjection(); // 立即刷新注入，让主对话下轮可见
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] 主事件记录失败`, e);
+    } finally {
+        recordingInProgress = false;
+    }
+}
+
+// ============ 链路 B：NPC 意图轮询（另一模型判意图）============
+
+let intentPollingInProgress = false;
+
+/**
+ * 定时对活跃 NPC（常驻 + 当前相遇）用「意图」绑定的模型判定意图：
+ * 输出 talk 则调 /intent/record（后端会 push npc_speak 事件，由 processNpcSpeakEvents 消费并发言）。
+ * 信息互通：喂给模型的 prompt 带世界状态 + 最近对话。
+ */
+async function pollNpcIntent() {
+    if (intentPollingInProgress) return;
+    intentPollingInProgress = true;
+    try {
+        const roles = await listBoundRoles();
+        if (!roles || roles.length === 0) return;
+
+        const stateText = cachedSummary || '';
+        const recentText = contextFromChat(6);
+
+        for (const role of roles) {
+            const profileId = await resolveProfile(role, USE_TYPES.INTENT);
+            const instruction = '请判断你现在是否要主动开口说话。只输出 JSON，格式：{"intent":"talk"} 或 {"intent":"silent"}。' +
+                '只有当你确有话想说（对当前对话有反应、有情绪、有信息要表达）时才输出 talk，否则 silent。';
+            const prompt = buildAuxPrompt({ role, stateText, recentText, instruction });
+            const raw = await llmGenerate(profileId, prompt, 60);
+            if (!raw) continue;
+
+            // 回传意图（后端 parseIntent 判定 talk 才入事件队列）
+            const result = await api('POST', '/intent/record', { role, raw });
+            if (result.ok && result.data?.intent === 'talk') {
+                console.log(`[${MODULE_NAME}] NPC「${role}」意图：talk（将触发发言）`);
+            }
+        }
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] NPC 意图轮询失败`, e);
+    } finally {
+        intentPollingInProgress = false;
     }
 }
 
@@ -1248,6 +1400,9 @@ async function init() {
     // 每 10 秒检查 NPC 发言事件（M4-8）
     setInterval(processNpcSpeakEvents, 10000);
 
+    // 每 30 秒轮询 NPC 意图（链路 B：另一模型判意图）
+    setInterval(pollNpcIntent, 30000);
+
     // 监听生成前事件：注入 prompt（M3-4）
     try {
         context.eventSource.on(context.eventTypes.GENERATION_STARTED, () => {
@@ -1257,7 +1412,7 @@ async function init() {
         console.error(`[${MODULE_NAME}] 生成前注入事件订阅失败`, e);
     }
 
-    // 监听消息接收事件：数值偏差检测（M3-6）
+    // 监听消息接收事件：数值偏差检测（M3-6）+ 主事件记录（链路 A）
     try {
         context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, (messageId) => {
             const chat = context.chat;
@@ -1266,6 +1421,10 @@ async function init() {
             if (msg && msg.mes) {
                 const $el = $(`.mes[mesid="${messageId}"]`);
                 scanNumericLeak(msg.mes, $el[0]);
+            }
+            // 链路 A：角色回复到达后，用轻量模型总结剧情（跳过用户自己的消息，避免每轮用户输入也触发）
+            if (msg && !msg.is_user && !msg.is_system) {
+                recordNarrative();
             }
         });
     } catch (e) {

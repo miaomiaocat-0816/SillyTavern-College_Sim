@@ -21,7 +21,7 @@
     display: block;
 }
 
-#university-sim-panel .drawer-header {
+#university-sim-panel .us-panel-header {
     background: var(--SmartThemeQuoteColor, #333);
     border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
     user-select: none;

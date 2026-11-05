@@ -458,6 +458,42 @@ export function registerRoutes(router) {
         ok(res, { role: role || 'npc', ...result });
     }));
 
+    // 主事件记录（前端用轻量模型总结剧情后回传，存 narrative 供主对话注入）
+    router.post('/narrative/record', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const { summary, npcChanges, flags } = req.body || {};
+        if (!summary || typeof summary !== 'string' || !summary.trim()) {
+            return fail(res, 400, 'BAD_REQUEST', '缺少 summary');
+        }
+        const entry = {
+            id: `n${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            summary: String(summary).trim(),
+            npcChanges: npcChanges || null,
+            flags: flags || null,
+            at: Date.now(),
+        };
+        const result = await mutate(chatId, (st) => {
+            if (!st.narrative) st.narrative = { entries: [] };
+            if (!Array.isArray(st.narrative.entries)) st.narrative.entries = [];
+            st.narrative.entries.push(entry);
+            // 只保留最近 50 条，避免无限增长
+            if (st.narrative.entries.length > 50) {
+                st.narrative.entries = st.narrative.entries.slice(-50);
+            }
+            return entry;
+        });
+        ok(res, { entry: result, count: (await getState(chatId)).narrative.entries.length });
+    }));
+
+    // 获取主事件记录（供前端注入）
+    router.get('/narrative', wrap(async (req, res) => {
+        const chatId = extractChatId(req);
+        const state = await getState(chatId);
+        const entries = state.narrative?.entries || [];
+        const limit = Number(req.query?.limit) || 10;
+        ok(res, { entries: entries.slice(-limit) });
+    }));
+
     // ===== M5：连接配置绑定 =====
     router.get('/bindings', wrap(async (req, res) => {
         const chatId = extractChatId(req);

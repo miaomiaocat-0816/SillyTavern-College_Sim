@@ -77,6 +77,9 @@ export function createDefaultState() {
             byRole: {},       // 按角色：role -> profileId
         },
         residents: [],        // 常驻角色（M4-10）
+        narrative: {          // 主事件记录（LLM 总结的剧情脉络，M6-多模型）
+            entries: [],      // [{id, summary, npcChanges, flags, at}]
+        },
     };
 }
 
@@ -132,6 +135,8 @@ function migrate(state) {
     if (!state.intent) state.intent = {};
     if (!state.bindings) state.bindings = { byUse: {}, byRole: {} };
     if (!state.residents) state.residents = [];
+    if (!state.narrative) state.narrative = { entries: [] };
+    if (!Array.isArray(state.narrative.entries)) state.narrative.entries = [];
     return state;
 }
 
